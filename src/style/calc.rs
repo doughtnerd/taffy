@@ -703,6 +703,16 @@ impl CalcStore {
         })
     }
 
+    /// Parses a CSS value (`"calc(50% - 12px)"`, `"min(25%, 60px)"`, `"minmax(calc(10% + 5px), 1fr)"`, or any value
+    /// the type's `FromStr` accepts), storing any `calc()` that doesn't simplify to a plain value here.
+    #[cfg(feature = "parse")]
+    pub fn parse_value<T: crate::util::parse::ParseWithCalc>(
+        &mut self,
+        input: &str,
+    ) -> crate::util::parse::ParseResult<T> {
+        T::parse_with_calc(input, self)
+    }
+
     /// Removes an expression, returning it; `None` for a handle that isn't (or is no longer) in the store.
     ///
     /// Remove an expression only when no style refers to it any more: a style still holding the handle would resolve
@@ -760,6 +770,386 @@ impl CalcStore {
         let index = (key & u64::from(u32::MAX)) as usize;
         let generation = (key >> 32) as u32;
         (self.entries.get(index)?.generation == generation).then_some(index)
+    }
+}
+
+/// Parsing `calc()` and the other CSS math functions (`parse` feature).
+#[cfg(feature = "parse")]
+pub(crate) mod parse {
+    use super::{Calc, CalcFunction, RoundingStrategy, SimplifiedCalc};
+    use crate::style::CalcHandle;
+    use crate::util::parse::{CssParseError, CssParseResult, ParseContext, ParseError, Parser, Token};
+    use crate::util::sys::{Box, Vec};
+    use std::borrow::Cow;
+
+    /// The math functions this parser accepts (CSS Values and Units Level 4 §10), by lowercase name.
+    const FUNCTIONS: &[&str] = &[
+        "calc", "min", "max", "clamp", "round", "mod", "rem", "abs", "sign", "hypot", "sin", "cos", "tan", "asin",
+        "acos", "atan", "atan2", "pow", "sqrt", "log", "exp",
+    ];
+
+    /// True when `name` (as cssparser gives a function token's name) is a CSS math function.
+    pub(crate) fn is_math_function(name: &str) -> bool {
+        FUNCTIONS.iter().any(|f| f.eq_ignore_ascii_case(name))
+    }
+
+    /// A parsed math function: simplified to a plain value, or stored behind a handle.
+    pub(crate) enum ParsedCalc {
+        /// A plain length or percentage
+        Simple(SimplifiedCalc),
+        /// A handle in the parse context's store
+        Handle(CalcHandle),
+    }
+
+    impl ParsedCalc {
+        /// The style value
+        pub(crate) fn into_value<T: super::FromCalc>(self) -> T {
+            match self {
+                ParsedCalc::Simple(simple) => T::from_simplified(simple),
+                ParsedCalc::Handle(handle) => T::from_calc_handle(handle),
+            }
+        }
+    }
+
+    /// An error with a message
+    fn error<'i>(_parser: &Parser<'i>, message: &'static str) -> CssParseError<'i> {
+        CssParseError::custom(Cow::Borrowed(message))
+    }
+
+    /// Parses the math function `name` (its function token just read) to a value for a length property: simplified
+    /// when it can be, else stored in the context's store; an error without one.
+    pub(crate) fn parse_calc_value<'i>(
+        name: &str,
+        parser: &mut Parser<'i>,
+        cx: &mut ParseContext<'_>,
+    ) -> CssParseResult<'i, ParsedCalc> {
+        let calc = parser.parse_nested_block(|parser| function(name, parser))?;
+        if calc.validate().is_err() {
+            return Err(error(parser, "the calc() expression doesn't resolve to a length"));
+        }
+        match calc.simplify() {
+            Some(simple) => Ok(ParsedCalc::Simple(simple)),
+            None => match cx.calcs.as_deref_mut() {
+                Some(store) => Ok(ParsedCalc::Handle(store.insert_unchecked(calc))),
+                None => Err(error(
+                    parser,
+                    "this calc() keeps a percentage, so it needs a CalcStore: parse with TaffyTree::parse_value or CalcStore::parse_value",
+                )),
+            },
+        }
+    }
+
+    /// Parses a whole math function (`calc(50% - 12px)`) to a [`Calc`] expression, without validating it.
+    pub(crate) fn parse_calc<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Calc> {
+        match parser.next()?.clone() {
+            Token::Function(name) if is_math_function(&name) => {
+                parser.parse_nested_block(|parser| function(&name, parser))
+            }
+            _ => Err(CssParseError::unexpected_token()),
+        }
+    }
+
+    /// `+` / `-` separated products
+    fn sum<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Calc> {
+        let mut terms = vec![product(parser)?];
+        loop {
+            let state = parser.state();
+            match parser.next().cloned() {
+                Ok(Token::Delim('+')) => terms.push(product(parser)?),
+                Ok(Token::Delim('-')) => terms.push(Calc::Negate(Box::new(product(parser)?))),
+                _ => {
+                    parser.reset(&state);
+                    break;
+                }
+            }
+        }
+        Ok(if terms.len() == 1 { terms.pop().unwrap() } else { Calc::Sum(terms) })
+    }
+
+    /// `*` / `/` separated values
+    fn product<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Calc> {
+        let mut factors = vec![value(parser)?];
+        loop {
+            let state = parser.state();
+            match parser.next().cloned() {
+                Ok(Token::Delim('*')) => factors.push(value(parser)?),
+                Ok(Token::Delim('/')) => factors.push(Calc::Invert(Box::new(value(parser)?))),
+                _ => {
+                    parser.reset(&state);
+                    break;
+                }
+            }
+        }
+        Ok(if factors.len() == 1 { factors.pop().unwrap() } else { Calc::Product(factors) })
+    }
+
+    /// A number, dimension, percentage, constant, parenthesised sum or nested math function
+    fn value<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Calc> {
+        use core::f32::consts::PI;
+        match parser.next()?.clone() {
+            Token::Number { value, .. } => Ok(Calc::Number(value)),
+            Token::Percentage { unit_value, .. } => Ok(Calc::Percent(unit_value)),
+            Token::Dimension { value, ref unit, .. } => {
+                let unit: &str = unit;
+                if unit.eq_ignore_ascii_case("px") {
+                    Ok(Calc::Length(value))
+                } else if unit.eq_ignore_ascii_case("deg") {
+                    Ok(Calc::Angle(value * PI / 180.0))
+                } else if unit.eq_ignore_ascii_case("rad") {
+                    Ok(Calc::Angle(value))
+                } else if unit.eq_ignore_ascii_case("grad") {
+                    Ok(Calc::Angle(value * PI / 200.0))
+                } else if unit.eq_ignore_ascii_case("turn") {
+                    Ok(Calc::Angle(value * 2.0 * PI))
+                } else {
+                    Err(error(parser, "calc() supports px, %, numbers and angles: convert other units to px first"))
+                }
+            }
+            Token::Ident(ref ident) => {
+                let ident: &str = ident;
+                let constant = |name: &str| ident.eq_ignore_ascii_case(name);
+                if constant("e") {
+                    Ok(Calc::Number(core::f32::consts::E))
+                } else if constant("pi") {
+                    Ok(Calc::Number(PI))
+                } else if constant("infinity") {
+                    Ok(Calc::Number(f32::INFINITY))
+                } else if constant("-infinity") {
+                    Ok(Calc::Number(f32::NEG_INFINITY))
+                } else if constant("nan") {
+                    Ok(Calc::Number(f32::NAN))
+                } else {
+                    Err(CssParseError::unexpected_token())
+                }
+            }
+            Token::ParenthesisBlock => parser.parse_nested_block(sum),
+            Token::Function(ref name) if is_math_function(name) => {
+                let name = name.clone();
+                parser.parse_nested_block(|parser| function(&name, parser))
+            }
+            _ => Err(CssParseError::unexpected_token()),
+        }
+    }
+
+    /// Comma-separated sums, at least one
+    fn list<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Vec<Calc>> {
+        let mut items = vec![sum(parser)?];
+        while parser.try_parse(|parser| parser.expect_comma()).is_ok() {
+            items.push(sum(parser)?);
+        }
+        Ok(items)
+    }
+
+    /// Exactly `count` comma-separated sums
+    fn args<'i>(parser: &mut Parser<'i>, count: usize) -> CssParseResult<'i, Vec<Calc>> {
+        let items = list(parser)?;
+        if items.len() == count {
+            Ok(items)
+        } else {
+            Err(error(parser, "a calc() function has the wrong number of arguments"))
+        }
+    }
+
+    /// `clamp()`'s bound: a sum, or `none`
+    fn bound<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Option<Calc>> {
+        if parser.try_parse(|parser| parser.expect_ident_matching("none")).is_ok() {
+            Ok(None)
+        } else {
+            sum(parser).map(Some)
+        }
+    }
+
+    /// The body of math function `name`
+    fn function<'i>(name: &str, parser: &mut Parser<'i>) -> CssParseResult<'i, Calc> {
+        let is = |f: &str| name.eq_ignore_ascii_case(f);
+        let call = |f: CalcFunction, items: Vec<Calc>| Ok(Calc::Function(f, items));
+        if is("calc") {
+            return sum(parser);
+        }
+        if is("min") {
+            return call(CalcFunction::Min, list(parser)?);
+        }
+        if is("max") {
+            return call(CalcFunction::Max, list(parser)?);
+        }
+        if is("clamp") {
+            let min = bound(parser)?;
+            parser.expect_comma()?;
+            let value = sum(parser)?;
+            parser.expect_comma()?;
+            let max = bound(parser)?;
+            return match (min, max) {
+                (Some(min), Some(max)) => call(CalcFunction::Clamp, vec![min, value, max]),
+                (None, Some(max)) => call(CalcFunction::ClampAbove, vec![value, max]),
+                (Some(min), None) => call(CalcFunction::ClampBelow, vec![min, value]),
+                (None, None) => Ok(value),
+            };
+        }
+        if is("round") {
+            let strategy = parser
+                .try_parse(|parser| -> CssParseResult<'i, RoundingStrategy> {
+                    let ident = parser.expect_ident()?.clone();
+                    let strategy = match () {
+                        _ if ident.eq_ignore_ascii_case("nearest") => RoundingStrategy::Nearest,
+                        _ if ident.eq_ignore_ascii_case("up") => RoundingStrategy::Up,
+                        _ if ident.eq_ignore_ascii_case("down") => RoundingStrategy::Down,
+                        _ if ident.eq_ignore_ascii_case("to-zero") => RoundingStrategy::ToZero,
+                        _ => return Err(CssParseError::unexpected_token()),
+                    };
+                    parser.expect_comma()?;
+                    Ok(strategy)
+                })
+                .unwrap_or_default();
+            let items = list(parser)?;
+            if items.len() > 2 {
+                return Err(error(parser, "round() takes a value and an optional step"));
+            }
+            return call(CalcFunction::Round(strategy), items);
+        }
+        if is("mod") {
+            return call(CalcFunction::Mod, args(parser, 2)?);
+        }
+        if is("rem") {
+            return call(CalcFunction::Rem, args(parser, 2)?);
+        }
+        if is("abs") {
+            return call(CalcFunction::Abs, args(parser, 1)?);
+        }
+        if is("sign") {
+            return call(CalcFunction::Sign, args(parser, 1)?);
+        }
+        #[cfg(feature = "std")]
+        {
+            let one = |f: CalcFunction, parser: &mut Parser<'i>| -> CssParseResult<'i, Calc> {
+                Ok(Calc::Function(f, args(parser, 1)?))
+            };
+            match () {
+                _ if is("hypot") => return call(CalcFunction::Hypot, list(parser)?),
+                _ if is("sin") => return one(CalcFunction::Sin, parser),
+                _ if is("cos") => return one(CalcFunction::Cos, parser),
+                _ if is("tan") => return one(CalcFunction::Tan, parser),
+                _ if is("asin") => return one(CalcFunction::Asin, parser),
+                _ if is("acos") => return one(CalcFunction::Acos, parser),
+                _ if is("atan") => return one(CalcFunction::Atan, parser),
+                _ if is("atan2") => return call(CalcFunction::Atan2, args(parser, 2)?),
+                _ if is("pow") => return call(CalcFunction::Pow, args(parser, 2)?),
+                _ if is("sqrt") => return one(CalcFunction::Sqrt, parser),
+                _ if is("exp") => return one(CalcFunction::Exp, parser),
+                _ if is("log") => {
+                    let items = list(parser)?;
+                    if items.len() > 2 {
+                        return Err(error(parser, "log() takes a value and an optional base"));
+                    }
+                    return call(CalcFunction::Log, items);
+                }
+                _ => {}
+            }
+        }
+        Err(error(parser, "this math function needs Taffy's std feature"))
+    }
+
+    /// `Calc` from a math function string, e.g. `"calc(50% - 12px)"` or `"min(25%, 60px)"` (not validated: see
+    /// [`Calc::validate`]).
+    impl core::str::FromStr for Calc {
+        type Err = ParseError;
+        fn from_str(input: &str) -> Result<Self, Self::Err> {
+            let mut parser = Parser::new(input);
+            parser.parse_entirely(parse_calc).map_err(ParseError::from)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::super::*;
+        use core::str::FromStr;
+
+        fn parse(input: &str) -> Calc {
+            Calc::from_str(input).unwrap_or_else(|err| panic!("{input}: {err}"))
+        }
+
+        #[test]
+        fn parses_the_math_functions_chrome_lays_out() {
+            // The values Chrome 158 gives for `width: <expression>` in a 400px containing block (before negative
+            // widths clamp to 0).
+            let cases: &[(&str, f32)] = &[
+                ("calc(50% - 12px)", 188.0),
+                ("calc((50% + 10px) * 2)", 420.0),
+                ("calc(100px * (10px / 5px))", 200.0),
+                ("calc(10% / 1px * 1px)", 40.0),
+                ("calc(10px - -5px)", 15.0),
+                ("CALC(2 * 10PX)", 20.0),
+                ("round(17px, 5px)", 15.0),
+                ("round(up, 17px, 5px)", 20.0),
+                ("round(down, -17px, 5px)", -20.0),
+                ("round(to-zero, -17px, 5px)", -15.0),
+                ("round(nearest, -15px, 10px)", -10.0),
+                ("mod(-17px, 5px)", 3.0),
+                ("rem(-17px, 5px)", -2.0),
+                ("abs(-25%)", 100.0),
+                ("clamp(10px, 50%, 150px)", 150.0),
+                ("clamp(10px, 5%, 150px)", 20.0),
+                ("clamp(none, 50%, 150px)", 150.0),
+                ("clamp(30px, 5%, none)", 30.0),
+                ("max(10px)", 10.0),
+                ("min(50%, 150px)", 150.0),
+                ("calc(sign(-5%) * 10px)", -10.0),
+                ("calc(infinity * 1px)", f32::MAX),
+                ("calc(NaN * 1px)", 0.0),
+                ("calc(1px / 0)", f32::MAX),
+            ];
+            for (input, expected) in cases {
+                let calc = parse(input);
+                assert_eq!(calc.validate(), Ok(()), "{input}");
+                assert_eq!(calc.resolve(400.0), *expected, "{input}");
+            }
+        }
+
+        #[cfg(feature = "std")]
+        #[test]
+        fn parses_the_trigonometric_and_exponential_functions() {
+            let cases: &[(&str, f32)] = &[
+                ("calc(10px * pi)", 31.4159),
+                ("calc(e * 10px)", 27.1828),
+                ("hypot(30%, 40px)", 126.491),
+                ("calc(100px * sin(30deg))", 50.0),
+                ("calc(100px * sin(0.5turn))", 0.0),
+                ("calc(100px * cos(100grad))", 0.0),
+                ("calc(100px * tan(0.7853982rad))", 100.0),
+                ("calc(atan2(1px, 1px) / 1deg * 1px)", 45.0),
+                ("calc(atan(1) / 1deg * 1px)", 45.0),
+                ("calc(pow(2, 3) * 10px)", 80.0),
+                ("calc(log(8, 2) * 10px)", 30.0),
+                ("calc(sqrt(16) * 10px)", 40.0),
+                ("calc(exp(0) * 10px)", 10.0),
+                ("calc(acos(2) / 1deg * 1px)", 0.0),
+            ];
+            for (input, expected) in cases {
+                let calc = parse(input);
+                assert_eq!(calc.validate(), Ok(()), "{input}");
+                let v = calc.resolve(400.0);
+                assert!((v - expected).abs() < 1e-3, "{input}: {v} != {expected}");
+            }
+        }
+
+        #[test]
+        fn refuses_what_chrome_refuses() {
+            // Invalid syntax
+            for input in [
+                "calc(10px -5px)",
+                "calc(10px+5px)",
+                "calc(10px 5px)",
+                "min()",
+                "clamp(1px, 2px)",
+                "calc(10em)",
+                "round(a, 1px, 2px)",
+            ] {
+                assert!(Calc::from_str(input).is_err(), "{input}");
+            }
+            // Valid syntax, invalid types
+            for input in ["calc(10px + 5)", "calc(10px * 5px)", "round(17px)", "calc(5)", "calc(sqrt(4px) * 1px)"] {
+                assert!(Calc::from_str(input).map(|c| c.validate().is_err()).unwrap_or(true), "{input}");
+            }
+        }
     }
 }
 

@@ -142,7 +142,10 @@ crate::util::parse::impl_parse_for_keyword_enum!(FlexWrap,
 
 #[cfg(all(feature = "parse", feature = "flexbox_balance"))]
 impl crate::util::parse::FromCss for FlexWrap {
-    fn from_css<'i>(input: &mut crate::util::parse::Parser<'i>) -> crate::util::parse::CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        input: &mut crate::util::parse::Parser<'i>,
+        _cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> crate::util::parse::CssParseResult<'i, Self> {
         let mut wrap: Option<Self> = None;
         let mut balance = false;
         let mut is_first = true;

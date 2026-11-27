@@ -268,7 +268,10 @@ impl AlignItems {
 
 #[cfg(feature = "parse")]
 impl FromCss for AlignItems {
-    fn from_css<'i>(input: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        input: &mut Parser<'i>,
+        _cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         let first = input.expect_ident()?.clone();
         cssparser::match_ignore_ascii_case! { &*first,
             "safe" => {
@@ -411,7 +414,10 @@ impl AlignContent {
 
 #[cfg(feature = "parse")]
 impl FromCss for AlignContent {
-    fn from_css<'i>(input: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        input: &mut Parser<'i>,
+        _cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         let first = input.expect_ident()?.clone();
         cssparser::match_ignore_ascii_case! { &*first,
             "safe" => {

@@ -779,6 +779,28 @@ impl<NodeContext> TaffyTree<NodeContext> {
         self.calcs.remove(handle)
     }
 
+    /// Parses a CSS value for a style (`"calc(50% - 12px)"`, `"clamp(10px, 10%, 20px)"`, a grid track list with
+    /// `calc()` tracks, or anything the type's `FromStr` accepts), storing any `calc()` that doesn't simplify to a plain
+    /// value in the tree. `FromStr` parses the same syntax but fails on such a `calc()`, having nowhere to keep it.
+    ///
+    /// ```
+    /// # use taffy::prelude::*;
+    /// let mut tree: TaffyTree<()> = TaffyTree::new();
+    /// let width: Dimension = tree.parse_value("calc(50% - 12px)").unwrap();
+    /// let fixed: Dimension = tree.parse_value("calc(10px + 5px)").unwrap();
+    /// assert_eq!(fixed, Dimension::length(15.0));
+    /// assert!("calc(50% - 12px)".parse::<Dimension>().is_err());
+    /// assert_eq!("calc(10px + 5px)".parse::<Dimension>().unwrap(), Dimension::length(15.0));
+    /// # let _ = width;
+    /// ```
+    #[cfg(all(feature = "calc", feature = "parse"))]
+    pub fn parse_value<T: crate::util::parse::ParseWithCalc>(
+        &mut self,
+        input: &str,
+    ) -> crate::util::parse::ParseResult<T> {
+        self.calcs.parse_value(input)
+    }
+
     /// The `calc()` expression a handle refers to, if the tree holds it.
     #[cfg(feature = "calc")]
     pub fn calc(&self, handle: CalcHandle) -> Option<&Calc> {
