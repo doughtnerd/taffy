@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### `calc()` in `TaffyTree` (#PR)
+
+`TaffyTree` now stores `calc()` expressions and resolves them during layout, so `calc()` works with the high-level API in every property that accepts one: sizes, min/max sizes, margins, padding, borders, gaps, insets, `flex-basis` and grid tracks (including `minmax()` and `fit-content(calc())`). Previously `TaffyTree` resolved every `calc()` to 0. Part of #225.
+
+- `Calc` is a `calc()` expression over lengths, percentages and numbers: sums, products, `min()`, `max()`, `clamp()`, `round()`, `mod()`, `rem()`, `abs()` and `sign()`. `Calc::validate` type-checks an expression as CSS does and `Calc::resolve` evaluates it against a percentage basis.
+- `CalcStore` owns expressions and hands out generation-checked `CalcHandle`s. `TaffyTree` uses one; a custom tree can use one from `LayoutPartialTree::resolve_calc_value`.
+- `TaffyTree::new_calc` stores an expression and returns the style value that refers to it (a plain length or percentage when the expression simplifies to one, as CSS does at parse time). `remove_calc` and `calc` manage stored expressions. Removing a node doesn't remove the expressions its style refers to, since a handle can be shared.
+- `TaffyTree::compute_layout_with_measure_and_calc` passes a `CalcResolver` to the measure function, so `calc()` in a measured leaf's own size, padding and border resolves. `compute_layout_with_measure` is unchanged.
+
 ## 0.16.0
 
 The MSRV for this release is 1.85, and Taffy now uses the 2024 edition.

@@ -35,6 +35,7 @@
 //! Examples which show usage of the high-level API include:
 //!
 //!   - [basic](https://github.com/DioxusLabs/taffy/blob/main/examples/basic.rs)
+//!   - [calc](https://github.com/DioxusLabs/taffy/blob/main/examples/calc.rs)
 //!   - [flexbox_gap](https://github.com/DioxusLabs/taffy/blob/main/examples/flexbox_gap.rs)
 //!   - [grid_holy_grail](https://github.com/DioxusLabs/taffy/blob/main/examples/grid_holy_grail.rs)
 //!   - [measure](https://github.com/DioxusLabs/taffy/blob/main/examples/measure.rs)
