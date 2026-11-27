@@ -21,6 +21,8 @@ pub enum Calc {
     Percent(f32),
     /// A number
     Number(f32),
+    /// An angle in radians, for the trigonometric functions
+    Angle(f32),
     /// The sum of the terms (`a - b` is `Sum([a, Negate(b)])`)
     Sum(Vec<Calc>),
     /// The product of the factors (`a / b` is `Product([a, Invert(b)])`)
@@ -58,6 +60,30 @@ pub enum CalcFunction {
     Abs,
     /// `sign(a)`: -1, 0 or 1
     Sign,
+    /// `hypot(a, …)`: the square root of the sum of the squares
+    Hypot,
+    /// `sin(a)` of an angle or a number of radians
+    Sin,
+    /// `cos(a)` of an angle or a number of radians
+    Cos,
+    /// `tan(a)` of an angle or a number of radians
+    Tan,
+    /// `asin(a)` of a number: an angle
+    Asin,
+    /// `acos(a)` of a number: an angle
+    Acos,
+    /// `atan(a)` of a number: an angle
+    Atan,
+    /// `atan2(y, x)`: an angle
+    Atan2,
+    /// `pow(base, exponent)` of numbers
+    Pow,
+    /// `sqrt(a)` of a number
+    Sqrt,
+    /// `log(a)` or `log(a, base)` of numbers
+    Log,
+    /// `exp(a)` of a number
+    Exp,
 }
 
 /// How `round()` picks a multiple.
@@ -85,6 +111,10 @@ pub enum CalcError {
     TypeMismatch,
     /// A function has the wrong number of arguments, or a sum or product has none
     WrongArgumentCount,
+    /// A function's argument has a type it doesn't accept (`sqrt(4px)`)
+    InvalidArgument,
+    /// The expression uses `hypot()`, a trigonometric or an exponential function, which need Taffy's `std` feature
+    Unsupported,
 }
 
 impl core::fmt::Display for CalcError {
@@ -93,6 +123,8 @@ impl core::fmt::Display for CalcError {
             CalcError::NotALength => "the calc() expression doesn't resolve to a length",
             CalcError::TypeMismatch => "the calc() expression combines values of different types",
             CalcError::WrongArgumentCount => "a calc() function has the wrong number of arguments",
+            CalcError::InvalidArgument => "a calc() function's argument has a type it doesn't accept",
+            CalcError::Unsupported => "hypot(), trigonometric and exponential functions need Taffy's std feature",
         })
     }
 }
@@ -104,18 +136,22 @@ impl std::error::Error for CalcError {}
 /// infinite results here rather than to `f32::MAX` keeps sums and products of them finite.
 const CALC_MAX: f64 = 33_554_431.0;
 
-/// The type of a value: the power of length in it (`px` is 1, `px / px` is 0, a number).
+/// The type of a value: the powers of length and angle in it (`px` is length¹, `px / px` is a number).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CalcType {
     /// The power of length (percentages are lengths)
     length: i8,
+    /// The power of angle
+    angle: i8,
 }
 
 impl CalcType {
     /// A number
-    const NUMBER: Self = Self { length: 0 };
+    const NUMBER: Self = Self { length: 0, angle: 0 };
     /// A length
-    const LENGTH: Self = Self { length: 1 };
+    const LENGTH: Self = Self { length: 1, angle: 0 };
+    /// An angle
+    const ANGLE: Self = Self { length: 0, angle: 1 };
 }
 
 impl Calc {
@@ -151,22 +187,41 @@ impl Calc {
         fn exactly(items: &[Calc], count: usize) -> Result<CalcType, CalcError> {
             if items.len() == count { same(items) } else { Err(CalcError::WrongArgumentCount) }
         }
+        /// A number, if `items` are numbers
+        fn numbers(items: &[Calc]) -> Result<CalcType, CalcError> {
+            match same(items)? {
+                CalcType::NUMBER => Ok(CalcType::NUMBER),
+                _ => Err(CalcError::InvalidArgument),
+            }
+        }
+        /// The functions that need `std` (`f64`'s transcendental functions)
+        fn needs_std() -> Result<(), CalcError> {
+            if cfg!(feature = "std") { Ok(()) } else { Err(CalcError::Unsupported) }
+        }
         Ok(match self {
             Calc::Length(_) | Calc::Percent(_) => CalcType::LENGTH,
             Calc::Number(_) => CalcType::NUMBER,
+            Calc::Angle(_) => CalcType::ANGLE,
             Calc::Sum(items) => same(items)?,
             Calc::Product(items) => {
                 if items.is_empty() {
                     return Err(CalcError::WrongArgumentCount);
                 }
-                let mut length = 0i8;
+                let mut t = CalcType::NUMBER;
                 for item in items {
-                    length = length.saturating_add(item.type_of()?.length);
+                    let it = item.type_of()?;
+                    t = CalcType {
+                        length: t.length.saturating_add(it.length),
+                        angle: t.angle.saturating_add(it.angle),
+                    };
                 }
-                CalcType { length }
+                t
             }
             Calc::Negate(c) => c.type_of()?,
-            Calc::Invert(c) => CalcType { length: -c.type_of()?.length },
+            Calc::Invert(c) => {
+                let t = c.type_of()?;
+                CalcType { length: -t.length, angle: -t.angle }
+            }
             Calc::Function(f, items) => match f {
                 CalcFunction::Min | CalcFunction::Max => same(items)?,
                 CalcFunction::Clamp => exactly(items, 3)?,
@@ -186,6 +241,45 @@ impl Calc {
                     exactly(items, 1)?;
                     CalcType::NUMBER
                 }
+                CalcFunction::Hypot => {
+                    needs_std()?;
+                    same(items)?
+                }
+                CalcFunction::Sin | CalcFunction::Cos | CalcFunction::Tan => {
+                    needs_std()?;
+                    match exactly(items, 1)? {
+                        CalcType::NUMBER | CalcType::ANGLE => CalcType::NUMBER,
+                        _ => return Err(CalcError::InvalidArgument),
+                    }
+                }
+                CalcFunction::Asin | CalcFunction::Acos | CalcFunction::Atan => {
+                    needs_std()?;
+                    exactly(items, 1)?;
+                    numbers(items)?;
+                    CalcType::ANGLE
+                }
+                CalcFunction::Atan2 => {
+                    needs_std()?;
+                    exactly(items, 2)?;
+                    CalcType::ANGLE
+                }
+                CalcFunction::Pow => {
+                    needs_std()?;
+                    exactly(items, 2)?;
+                    numbers(items)?
+                }
+                CalcFunction::Sqrt | CalcFunction::Exp => {
+                    needs_std()?;
+                    exactly(items, 1)?;
+                    numbers(items)?
+                }
+                CalcFunction::Log => {
+                    needs_std()?;
+                    if !(1..=2).contains(&items.len()) {
+                        return Err(CalcError::WrongArgumentCount);
+                    }
+                    numbers(items)?
+                }
             },
         })
     }
@@ -193,7 +287,7 @@ impl Calc {
     /// The value in double precision, NaN and infinities kept
     fn eval(&self, basis: f64) -> f64 {
         match self {
-            Calc::Length(v) | Calc::Number(v) => f64::from(*v),
+            Calc::Length(v) | Calc::Number(v) | Calc::Angle(v) => f64::from(*v),
             Calc::Percent(p) => f64::from(*p) * basis,
             Calc::Sum(items) => items.iter().map(|c| c.eval(basis)).sum(),
             Calc::Product(items) => items.iter().map(|c| c.eval(basis)).product(),
@@ -207,7 +301,7 @@ impl Calc {
     fn uses_percentage(&self) -> bool {
         match self {
             Calc::Percent(_) => true,
-            Calc::Length(_) | Calc::Number(_) => false,
+            Calc::Length(_) | Calc::Number(_) | Calc::Angle(_) => false,
             Calc::Negate(c) | Calc::Invert(c) => c.uses_percentage(),
             Calc::Sum(items) | Calc::Product(items) | Calc::Function(_, items) => {
                 items.iter().any(Calc::uses_percentage)
@@ -293,6 +387,59 @@ fn eval_function(f: CalcFunction, items: &[Calc], basis: f64) -> f64 {
                 v
             }
         }
+        CalcFunction::Hypot => transcendental::hypot(items.iter().map(|c| c.eval(basis))),
+        CalcFunction::Sin => transcendental::sin(arg(0)),
+        CalcFunction::Cos => transcendental::cos(arg(0)),
+        CalcFunction::Tan => transcendental::tan(arg(0)),
+        CalcFunction::Asin => transcendental::asin(arg(0)),
+        CalcFunction::Acos => transcendental::acos(arg(0)),
+        CalcFunction::Atan => transcendental::atan(arg(0)),
+        CalcFunction::Atan2 => transcendental::atan2(arg(0), arg(1)),
+        CalcFunction::Pow => transcendental::pow(arg(0), arg(1)),
+        CalcFunction::Sqrt => transcendental::sqrt(arg(0)),
+        CalcFunction::Log => {
+            let ln = transcendental::ln(arg(0));
+            if items.len() > 1 { ln / transcendental::ln(arg(1)) } else { ln }
+        }
+        CalcFunction::Exp => transcendental::exp(arg(0)),
+    }
+}
+
+/// `f64`'s transcendental functions, which need `std`. Without it, [`Calc::validate`] refuses the functions that use
+/// them, and these return NaN.
+mod transcendental {
+    /// Defines functions that call the `f64` method of the same name with `std`, and return NaN without it
+    macro_rules! transcendental {
+        ($($name:ident($($arg:ident),+) => $body:expr;)+) => {
+            $(
+                #[doc = concat!("`", stringify!($name), "`")]
+                #[allow(unused_variables)]
+                pub(super) fn $name($($arg: f64),+) -> f64 {
+                    #[cfg(feature = "std")]
+                    return $body;
+                    #[cfg(not(feature = "std"))]
+                    f64::NAN
+                }
+            )+
+        };
+    }
+    transcendental! {
+        sin(a) => a.sin();
+        cos(a) => a.cos();
+        tan(a) => a.tan();
+        asin(a) => a.asin();
+        acos(a) => a.acos();
+        atan(a) => a.atan();
+        atan2(y, x) => y.atan2(x);
+        pow(a, b) => a.powf(b);
+        sqrt(a) => a.sqrt();
+        ln(a) => a.ln();
+        exp(a) => a.exp();
+    }
+
+    /// `hypot(a, …)`
+    pub(super) fn hypot(values: impl Iterator<Item = f64>) -> f64 {
+        sqrt(values.map(|v| v * v).sum())
     }
 }
 
@@ -564,7 +711,10 @@ pub(crate) mod parse {
     use std::borrow::Cow;
 
     /// The math functions this parser accepts (CSS Values and Units Level 4 §10), by lowercase name.
-    const FUNCTIONS: &[&str] = &["calc", "min", "max", "clamp", "round", "mod", "rem", "abs", "sign"];
+    const FUNCTIONS: &[&str] = &[
+        "calc", "min", "max", "clamp", "round", "mod", "rem", "abs", "sign", "hypot", "sin", "cos", "tan", "asin",
+        "acos", "atan", "atan2", "pow", "sqrt", "log", "exp",
+    ];
 
     /// True when `name` (as cssparser gives a function token's name) is a CSS math function.
     pub(crate) fn is_math_function(name: &str) -> bool {
@@ -667,10 +817,21 @@ pub(crate) mod parse {
             Token::Number { value, .. } => Ok(Calc::Number(value)),
             Token::Percentage { unit_value, .. } => Ok(Calc::Percent(unit_value)),
             Token::Dimension { value, ref unit, .. } => {
-                if unit.eq_ignore_ascii_case("px") {
+                use core::f32::consts::PI;
+                let unit: &str = unit;
+                let is = |u: &str| unit.eq_ignore_ascii_case(u);
+                if is("px") {
                     Ok(Calc::Length(value))
+                } else if is("deg") {
+                    Ok(Calc::Angle(value * PI / 180.0))
+                } else if is("rad") {
+                    Ok(Calc::Angle(value))
+                } else if is("grad") {
+                    Ok(Calc::Angle(value * PI / 200.0))
+                } else if is("turn") {
+                    Ok(Calc::Angle(value * 2.0 * PI))
                 } else {
-                    Err(error(parser, "calc() supports px, % and numbers: convert other units to px first"))
+                    Err(error(parser, "calc() supports px, %, numbers and angles: convert other units to px first"))
                 }
             }
             Token::Ident(ref ident) => {
@@ -786,7 +947,36 @@ pub(crate) mod parse {
         if is("sign") {
             return call(CalcFunction::Sign, args(parser, 1)?);
         }
-        Err(CssParseError::unexpected_token())
+        if is("hypot") {
+            return call(CalcFunction::Hypot, list(parser)?);
+        }
+        if is("atan2") {
+            return call(CalcFunction::Atan2, args(parser, 2)?);
+        }
+        if is("pow") {
+            return call(CalcFunction::Pow, args(parser, 2)?);
+        }
+        if is("log") {
+            let items = list(parser)?;
+            if items.len() > 2 {
+                return Err(error(parser, "log() takes a value and an optional base"));
+            }
+            return call(CalcFunction::Log, items);
+        }
+        let one = [
+            ("sin", CalcFunction::Sin),
+            ("cos", CalcFunction::Cos),
+            ("tan", CalcFunction::Tan),
+            ("asin", CalcFunction::Asin),
+            ("acos", CalcFunction::Acos),
+            ("atan", CalcFunction::Atan),
+            ("sqrt", CalcFunction::Sqrt),
+            ("exp", CalcFunction::Exp),
+        ];
+        match one.iter().find(|(f, _)| is(f)) {
+            Some(&(_, f)) => call(f, args(parser, 1)?),
+            None => Err(CssParseError::unexpected_token()),
+        }
     }
 
     /// `Calc` from a math function string, e.g. `"calc(50% - 12px)"` or `"min(25%, 60px)"` (not validated: see
@@ -850,6 +1040,52 @@ pub(crate) mod parse {
             }
         }
 
+        #[cfg(feature = "std")]
+        #[test]
+        fn parses_the_trigonometric_and_exponential_functions() {
+            // Chrome 158's values for `width: <expression>` in a 400px containing block
+            let cases: &[(&str, f32)] = &[
+                ("hypot(30%, 40px)", 126.491),
+                ("calc(100px * sin(30deg))", 50.0),
+                ("calc(100px * sin(0.5turn))", 0.0),
+                ("calc(100px * cos(100grad))", 0.0),
+                ("calc(100px * tan(0.7853982rad))", 100.0),
+                ("calc(100px * sin(pi / 6))", 50.0),
+                ("calc(atan2(1px, 1px) / 1deg * 1px)", 45.0),
+                ("calc(atan(1) / 1deg * 1px)", 45.0),
+                ("calc(pow(2, 3) * 10px)", 80.0),
+                ("calc(log(8, 2) * 10px)", 30.0),
+                ("calc(sqrt(16) * 10px)", 40.0),
+                ("calc(exp(0) * 10px)", 10.0),
+                // acos(2) is NaN, so the whole calculation is 0
+                ("calc(acos(2) / 1deg * 1px)", 0.0),
+            ];
+            for (input, expected) in cases {
+                let calc = parse(input);
+                assert_eq!(calc.validate(), Ok(()), "{input}");
+                let v = calc.resolve(400.0);
+                assert!((v - expected).abs() < 1e-3, "{input}: {v} != {expected}");
+            }
+            for (input, error) in [
+                ("calc(sqrt(4px) * 1px)", CalcError::InvalidArgument),
+                ("calc(sin(10px) * 1px)", CalcError::InvalidArgument),
+                ("calc(asin(30deg) * 1px)", CalcError::InvalidArgument),
+                ("calc(atan2(1px, 1) * 1px)", CalcError::TypeMismatch),
+                ("calc(10px * 1deg)", CalcError::NotALength),
+                ("calc(atan(1) * 1px)", CalcError::NotALength),
+            ] {
+                assert_eq!(parse(input).validate(), Err(error), "{input}");
+            }
+        }
+
+        #[cfg(not(feature = "std"))]
+        #[test]
+        fn the_transcendental_functions_need_std() {
+            for input in ["hypot(30%, 40px)", "calc(100px * sin(30deg))", "calc(pow(2, 3) * 10px)"] {
+                assert_eq!(parse(input).validate(), Err(CalcError::Unsupported), "{input}");
+            }
+        }
+
         #[test]
         fn refuses_what_chrome_refuses() {
             // Invalid syntax
@@ -861,13 +1097,11 @@ pub(crate) mod parse {
                 "clamp(1px, 2px)",
                 "calc(10em)",
                 "round(a, 1px, 2px)",
-                "calc(10deg)",
-                "sin(1)",
             ] {
                 assert!(Calc::from_str(input).is_err(), "{input}");
             }
             // Valid syntax, invalid types
-            for input in ["calc(10px + 5)", "calc(10px * 5px)", "round(17px)", "calc(5)"] {
+            for input in ["calc(10px + 5)", "calc(10px * 5px)", "round(17px)", "calc(5)", "calc(10deg)"] {
                 assert!(Calc::from_str(input).map(|c| c.validate().is_err()).unwrap_or(true), "{input}");
             }
         }

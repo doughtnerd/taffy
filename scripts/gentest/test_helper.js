@@ -9,7 +9,7 @@ function getScrollBarWidth() {
 }
 
 // CSS math functions (calc(), min(), clamp(), ...): their text is passed through to Taffy's parser as it is
-const MATH_FUNCTION_REGEX = /^(calc|min|max|clamp|round|mod|rem|abs|sign)\(/i;
+const MATH_FUNCTION_REGEX = /^(calc|min|max|clamp|round|mod|rem|abs|sign|hypot|sin|cos|tan|asin|acos|atan|atan2|pow|sqrt|log|exp)\(/i;
 
 // Split `input` at `separator` (a regex matching one separator) outside parentheses
 function splitTopLevel(input, separator = /\s/) {

@@ -11,6 +11,7 @@
 - `TaffyTree::new_calc` stores an expression and returns the style value that refers to it (a plain length or percentage when the expression simplifies to one, as CSS does at parse time). `remove_calc` and `calc` manage stored expressions. Removing a node doesn't remove the expressions its style refers to, since a handle can be shared.
 - `TaffyTree::compute_layout_with_measure_and_calc` passes a `CalcResolver` to the measure function, so `calc()` in a measured leaf's own size, padding and border resolves. `compute_layout_with_measure` is unchanged.
 - With the `parse` feature, length values and grid tracks parse `calc()` and the math functions above, and `Calc` implements `FromStr` (#PR). An expression that simplifies parses with `FromStr`; one that keeps a percentage needs somewhere to be stored, so it parses with `TaffyTree::parse_value` or `CalcStore::parse_value` (`ParseWithCalc`). A parse that fails stores nothing.
+- With `std`, `Calc` also covers `hypot()` and the trigonometric and exponential functions (`sin()`, `cos()`, `tan()`, `asin()`, `acos()`, `atan()`, `atan2()`, `pow()`, `sqrt()`, `log()` and `exp()`), with angles in `deg`, `rad`, `grad` and `turn` (#PR). Without `std`, `Calc::validate` refuses them with `CalcError::Unsupported`.
 - The test generator passes math functions through to Taffy's parser, so test fixtures can use them (#PR).
 
 ## 0.16.0

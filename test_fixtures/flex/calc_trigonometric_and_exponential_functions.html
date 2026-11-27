@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="../../scripts/gentest/test_helper.js"></script>
+  <link rel="stylesheet" type="text/css" href="../../scripts/gentest/test_base_style.css">
+  <title>
+    hypot(), trigonometric and exponential functions with percentages and angles
+  </title>
+</head>
+<body>
+
+<div id="test-root" style="width: 400px; height: 300px; flex-direction: column; align-items: flex-start;">
+  <div style="width: hypot(30%, 40px); height: 10px;"></div>
+  <div style="width: calc(50% * sin(30deg)); height: 10px;"></div>
+  <div style="width: calc(25% * cos(0.5turn) + 150px); height: 10px;"></div>
+  <div style="width: calc(10% * tan(50grad)); height: 10px;"></div>
+  <div style="width: calc(atan2(1, 1) / 1deg * 1%); height: 10px;"></div>
+  <div style="width: calc(asin(0.5) / 1rad * 100px); height: 10px;"></div>
+  <div style="width: calc(pow(2, 3) * 5% + sqrt(16) * 1px); height: 10px;"></div>
+  <div style="width: calc(log(1000, 10) * 10% - exp(1) * 1px); height: 10px;"></div>
+</div>
+
+</body>
+</html>
