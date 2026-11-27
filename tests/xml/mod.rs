@@ -12393,6 +12393,30 @@ mod flex {
         crate::run_xml_test("flex", "calc_size__content_box_rtl");
     }
 
+    #[cfg(feature = "calc")]
+    #[test]
+    fn calc_trigonometric_and_exponential_functions__border_box_ltr() {
+        crate::run_xml_test("flex", "calc_trigonometric_and_exponential_functions__border_box_ltr");
+    }
+
+    #[cfg(feature = "calc")]
+    #[test]
+    fn calc_trigonometric_and_exponential_functions__content_box_ltr() {
+        crate::run_xml_test("flex", "calc_trigonometric_and_exponential_functions__content_box_ltr");
+    }
+
+    #[cfg(feature = "calc")]
+    #[test]
+    fn calc_trigonometric_and_exponential_functions__border_box_rtl() {
+        crate::run_xml_test("flex", "calc_trigonometric_and_exponential_functions__border_box_rtl");
+    }
+
+    #[cfg(feature = "calc")]
+    #[test]
+    fn calc_trigonometric_and_exponential_functions__content_box_rtl() {
+        crate::run_xml_test("flex", "calc_trigonometric_and_exponential_functions__content_box_rtl");
+    }
+
     #[test]
     fn child_min_max_width_flexing__border_box_ltr() {
         crate::run_xml_test("flex", "child_min_max_width_flexing__border_box_ltr");
