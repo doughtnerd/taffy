@@ -1,4 +1,7 @@
-use taffy::{LayoutInput, LayoutOutput, NodeId, ResolveOrZero, Size, Style, TaffyTree, compute_leaf_layout};
+use taffy::{
+    CalcHandle, CalcResolver, LayoutInput, LayoutOutput, NodeId, ResolveOrZero, Size, Style, TaffyTree,
+    compute_leaf_layout,
+};
 
 /// Creates a `TaffyTree` that uses `TestNodeContext`. The purpose of this function is
 /// to allow `TaffyTree` to be monomophised once in this crate rather than separately for
@@ -62,41 +65,58 @@ pub enum TestMeasureData {
 /// A measure function for tests that works with `TestNodeContext`
 pub fn test_measure_function(
     inputs: LayoutInput,
+    node_id: NodeId,
+    context: Option<&mut TestNodeContext>,
+    style: &Style,
+) -> LayoutOutput {
+    measure_with(inputs, node_id, context, style, |_, _| 0.0)
+}
+
+/// `test_measure_function` for `TaffyTree::compute_layout_with_measure_and_calc`: `calc()` values in the leaf's own
+/// style (its size, min/max sizes, padding and border) resolve through the tree.
+pub fn test_measure_function_with_calc(
+    inputs: LayoutInput,
+    node_id: NodeId,
+    context: Option<&mut TestNodeContext>,
+    style: &Style,
+    calc: CalcResolver<'_>,
+) -> LayoutOutput {
+    measure_with(inputs, node_id, context, style, |handle, basis| calc.resolve(handle, basis))
+}
+
+fn measure_with(
+    inputs: LayoutInput,
     _node_id: NodeId,
     context: Option<&mut TestNodeContext>,
     style: &Style,
+    resolve_calc: impl Fn(CalcHandle, f32) -> f32,
 ) -> LayoutOutput {
     let is_horizontal_text = matches!(
         context.as_deref(),
         Some(TestNodeContext { measure_data: TestMeasureData::AhemText(data), .. }) if data.writing_mode == WritingMode::Horizontal
     );
-    let mut output = compute_leaf_layout(
-        inputs,
-        style,
-        |_, _| 0.0,
-        |known_dimensions, available_space| {
-            if let Size { width: Some(width), height: Some(height) } = known_dimensions {
-                return Size { width, height };
-            }
+    let mut output = compute_leaf_layout(inputs, style, &resolve_calc, |known_dimensions, available_space| {
+        if let Size { width: Some(width), height: Some(height) } = known_dimensions {
+            return Size { width, height };
+        }
 
-            let Some(context) = context else { return known_dimensions.map(|d| d.unwrap_or(0.0)) };
+        let Some(context) = context else { return known_dimensions.map(|d| d.unwrap_or(0.0)) };
 
-            // Increment count
-            context.count += 1;
+        // Increment count
+        context.count += 1;
 
-            let compute_size = match &context.measure_data {
-                TestMeasureData::Zero => Size::ZERO,
-                TestMeasureData::Fixed(size) => *size,
-                TestMeasureData::AspectRatio(data) => data.measure(known_dimensions),
-                TestMeasureData::AhemText(data) => data.measure(known_dimensions, available_space),
-            };
+        let compute_size = match &context.measure_data {
+            TestMeasureData::Zero => Size::ZERO,
+            TestMeasureData::Fixed(size) => *size,
+            TestMeasureData::AspectRatio(data) => data.measure(known_dimensions),
+            TestMeasureData::AhemText(data) => data.measure(known_dimensions, available_space),
+        };
 
-            Size {
-                width: known_dimensions.width.unwrap_or(compute_size.width),
-                height: known_dimensions.height.unwrap_or(compute_size.height),
-            }
-        },
-    );
+        Size {
+            width: known_dimensions.width.unwrap_or(compute_size.width),
+            height: known_dimensions.height.unwrap_or(compute_size.height),
+        }
+    });
     // Ahem text (10px, line-height 1): ascent 8px and descent 2px per line
     if is_horizontal_text {
         let padding = style.padding.resolve_or_zero(inputs.parent_size.width, |_, _| 0.0);

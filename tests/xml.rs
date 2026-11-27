@@ -5,7 +5,7 @@ use taffy::{
     GridTemplateComponent, GridTemplateTracks, JustifyContent, JustifyItems, LengthPercentage, LengthPercentageAuto,
     Line, NodeId, Point, PrintTree, Rect, Size, TaffyTree, prelude::TaffyZero as _,
 };
-use taffy_test_helpers::{TestNodeContext, test_measure_function};
+use taffy_test_helpers::{TestNodeContext, test_measure_function_with_calc};
 
 #[path = "./xml/mod.rs"]
 mod xml;
@@ -205,7 +205,7 @@ fn run_xml_test(group: &str, name: &str) {
     #[cfg(all(debug_assertions, feature = "std"))]
     let cache_mode_change_evictions = taffy::tree::cache_mode_change_evictions();
 
-    tree.compute_layout_with_measure(root_node_id, available_space, test_measure_function).unwrap();
+    tree.compute_layout_with_measure_and_calc(root_node_id, available_space, test_measure_function_with_calc).unwrap();
 
     // The layout cache of a node only holds results computed with a single `sizing_mode` and
     // `vertical_margins_are_collapsible`, so laying a node out with more than one combination

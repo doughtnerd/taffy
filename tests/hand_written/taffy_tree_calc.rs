@@ -315,6 +315,53 @@ mod taffy_tree_calc {
     }
 
     #[test]
+    fn a_measured_leaf_resolves_calc_in_its_own_padding() {
+        // padding-left: calc(10% + 2px); padding-top: calc(5% - 4px); 50 x 20 of content (content-box): Chrome's 92 x 36.
+        use taffy_test_helpers::{TestNodeContext, test_measure_function_with_calc};
+        let mut t: TaffyTree<TestNodeContext> = TaffyTree::new();
+        t.disable_rounding();
+        let left: LengthPercentage = t.calc_value(Calc::Sum(vec![Calc::Percent(0.1), Calc::Length(2.0)])).unwrap();
+        let top: LengthPercentage = t.calc_value(Calc::Sum(vec![Calc::Percent(0.05), Calc::Length(-4.0)])).unwrap();
+        let leaf = t
+            .new_leaf_with_context(
+                Style {
+                    box_sizing: BoxSizing::ContentBox,
+                    padding: Rect { left, top, right: zero(), bottom: zero() },
+                    ..sized(length(50.0), length(20.0))
+                },
+                TestNodeContext::fixed(50.0, 20.0),
+            )
+            .unwrap();
+        let root = t
+            .new_with_children(
+                Style { align_items: AlignItems::FLEX_START, ..sized(length(400.0), length(300.0)) },
+                &[leaf],
+            )
+            .unwrap();
+        t.compute_layout_with_measure_and_calc(root, Size::MAX_CONTENT, test_measure_function_with_calc).unwrap();
+        let l = t.layout(leaf).unwrap();
+        assert_eq!((l.size.width, l.size.height), (92.0, 36.0));
+
+        // compute_layout (no measure function) resolves them too, around an empty leaf.
+        let mut t = tree();
+        let left: LengthPercentage = t.calc_value(Calc::Sum(vec![Calc::Percent(0.1), Calc::Length(2.0)])).unwrap();
+        let leaf = t
+            .new_leaf(Style {
+                padding: Rect { left, top: zero(), right: zero(), bottom: zero() },
+                ..Default::default()
+            })
+            .unwrap();
+        let root = t
+            .new_with_children(
+                Style { align_items: AlignItems::FLEX_START, ..sized(length(400.0), length(300.0)) },
+                &[leaf],
+            )
+            .unwrap();
+        t.compute_layout(root, Size::MAX_CONTENT).unwrap();
+        assert_box(&t, leaf, [0.0, 0.0, 42.0, 0.0]);
+    }
+
+    #[test]
     fn handles_can_be_shared_removed_and_cleared() {
         let mut t = tree();
         let w = lin(&mut t, 50.0, 0.0);
@@ -356,6 +403,5 @@ mod taffy_tree_calc {
         assert!(t.new_calc(Calc::Number(2.0)).is_err());
         assert!(t.new_calc(Calc::Sum(vec![Calc::Length(1.0), Calc::Number(2.0)])).is_err());
         assert!(t.new_calc(Calc::Product(vec![Calc::Length(1.0), Calc::Length(2.0)])).is_err());
-        let _ = BoxSizing::BorderBox;
     }
 }

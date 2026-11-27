@@ -1092,13 +1092,35 @@ impl<NodeContext> TaffyTree<NodeContext> {
     where
         MeasureFunction: FnMut(LayoutInput, NodeId, Option<&mut NodeContext>, &Style) -> LayoutOutput,
     {
-        self.compute_layout_with_calc_measure(node_id, available_space, |inputs, node_id, context, style, _| {
+        self.compute_layout_with_measure_and_calc(node_id, available_space, |inputs, node_id, context, style, _| {
             measure_function(inputs, node_id, context, style)
         })
     }
 
-    /// `compute_layout_with_measure`, with a measure function that also gets a [`CalcResolver`] for the leaf's style.
-    fn compute_layout_with_calc_measure<MeasureFunction>(
+    /// [`compute_layout_with_measure`](Self::compute_layout_with_measure), with a measure function that also gets a
+    /// [`CalcResolver`] for the leaf's style, so `calc()` values in a measured leaf's own size, min/max sizes, padding
+    /// and border resolve. Pass it on as [`compute_leaf_layout`]'s `resolve_calc_value`:
+    ///
+    /// ```
+    /// # use taffy::prelude::*;
+    /// # use taffy::{BoxSizing, Calc, compute_leaf_layout};
+    /// let mut tree: TaffyTree<Size<f32>> = TaffyTree::new();
+    /// // padding-left: calc(10% + 2px)
+    /// let pad: LengthPercentage = tree.calc_value(Calc::Sum(vec![Calc::Percent(0.1), Calc::Length(2.0)])).unwrap();
+    /// let style = Style {
+    ///     box_sizing: BoxSizing::ContentBox,
+    ///     size: Size { width: length(50.0), height: auto() },
+    ///     padding: Rect { left: pad, right: zero(), top: zero(), bottom: zero() },
+    ///     ..Default::default()
+    /// };
+    /// let text = tree.new_leaf_with_context(style, Size { width: 50.0, height: 20.0 }).unwrap();
+    /// let root = tree.new_with_children(Style { size: Size { width: length(400.0), height: auto() }, align_items: AlignItems::FLEX_START, ..Default::default() }, &[text]).unwrap();
+    /// tree.compute_layout_with_measure_and_calc(root, Size::MAX_CONTENT, |inputs, _, content, style, calc| {
+    ///     compute_leaf_layout(inputs, style, |handle, basis| calc.resolve(handle, basis), |_, _| content.copied().unwrap_or(Size::ZERO))
+    /// }).unwrap();
+    /// assert_eq!(tree.layout(text).unwrap().size.width, 92.0);
+    /// ```
+    pub fn compute_layout_with_measure_and_calc<MeasureFunction>(
         &mut self,
         node_id: NodeId,
         available_space: Size<AvailableSpace>,
@@ -1118,7 +1140,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
 
     /// Updates the stored layout of the provided `node` and its children
     pub fn compute_layout(&mut self, node: NodeId, available_space: Size<AvailableSpace>) -> Result<(), TaffyError> {
-        self.compute_layout_with_calc_measure(node, available_space, |inputs, _, _, style, calc| {
+        self.compute_layout_with_measure_and_calc(node, available_space, |inputs, _, _, style, calc| {
             compute_leaf_layout(inputs, style, |handle, basis| calc.resolve(handle, basis), |_, _| Size::ZERO)
         })
     }
