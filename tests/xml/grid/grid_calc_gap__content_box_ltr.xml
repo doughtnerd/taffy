@@ -1,0 +1,19 @@
+<test name="grid_calc_gap__content_box_ltr" use-rounding="true">
+  <viewport width="max-content" height="max-content"/>
+  <input>
+    <div display="grid" box-sizing="content-box" direction="ltr" position="absolute" width="400px" height="200px" row-gap="max(5%, 20px)" column-gap="calc(5% - 10px)" grid-template-rows="1fr 1fr" grid-template-columns="1fr 1fr 1fr">
+      <div box-sizing="content-box" direction="ltr" position="relative"/>
+      <div box-sizing="content-box" direction="ltr" position="relative"/>
+      <div box-sizing="content-box" direction="ltr" position="relative"/>
+      <div box-sizing="content-box" direction="ltr" position="relative"/>
+    </div>
+  </input>
+  <expectations>
+    <node x="0" y="0" width="400" height="200" resolved-rows="90px 90px" resolved-columns="126.656px 126.672px 126.656px">
+      <node x="0" y="0" width="127" height="90"/>
+      <node x="137" y="0" width="126" height="90"/>
+      <node x="273" y="0" width="127" height="90"/>
+      <node x="0" y="110" width="127" height="90"/>
+    </node>
+  </expectations>
+</test>

@@ -1,0 +1,19 @@
+<test name="calc_percentage_of_indefinite_height__content_box_rtl" use-rounding="true">
+  <viewport width="max-content" height="max-content"/>
+  <input>
+    <div box-sizing="content-box" direction="rtl" position="absolute" flex-direction="column" align-items="flex-start" width="400px">
+      <div box-sizing="content-box" direction="rtl" position="relative" width="20px" height="calc(50% + 10px)">
+        <div box-sizing="content-box" direction="rtl" position="relative" height="30px"/>
+      </div>
+      <div box-sizing="content-box" direction="rtl" position="relative" width="20px" height="calc(15px)"/>
+    </div>
+  </input>
+  <expectations>
+    <node x="0" y="0" width="400" height="45">
+      <node x="380" y="0" width="20" height="30">
+        <node x="20" y="0" width="0" height="30"/>
+      </node>
+      <node x="380" y="30" width="20" height="15"/>
+    </node>
+  </expectations>
+</test>

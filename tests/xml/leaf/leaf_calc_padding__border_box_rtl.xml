@@ -1,0 +1,15 @@
+<test name="leaf_calc_padding__border_box_rtl" use-rounding="true">
+  <viewport width="max-content" height="max-content"/>
+  <input>
+    <div direction="rtl" position="absolute" align-items="flex-start" width="400px" height="300px">
+      <text direction="rtl" position="relative" width="50px" padding-top="calc(5% - 4px)" padding-left="calc(10% + 2px)">
+        HH
+      </text>
+    </div>
+  </input>
+  <expectations>
+    <node x="0" y="0" width="400" height="300">
+      <node x="350" y="0" width="50" height="26"/>
+    </node>
+  </expectations>
+</test>

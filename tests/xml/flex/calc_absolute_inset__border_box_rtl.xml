@@ -1,0 +1,15 @@
+<test name="calc_absolute_inset__border_box_rtl" use-rounding="true">
+  <viewport width="max-content" height="max-content"/>
+  <input>
+    <div direction="rtl" position="relative" width="400px" height="300px">
+      <div direction="rtl" position="absolute" height="calc(10% + 5px)" top="calc(50% - 10px)" left="calc(25% + 4px)" right="calc(10% - 20px)"/>
+      <div direction="rtl" position="absolute" width="20px" height="20px" bottom="calc(5% + 1px)" right="min(10%, 15px)"/>
+    </div>
+  </input>
+  <expectations>
+    <node x="0" y="0" width="400" height="300">
+      <node x="104" y="140" width="276" height="35"/>
+      <node x="365" y="264" width="20" height="20"/>
+    </node>
+  </expectations>
+</test>

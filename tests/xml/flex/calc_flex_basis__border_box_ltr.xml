@@ -1,0 +1,17 @@
+<test name="calc_flex_basis__border_box_ltr" use-rounding="true">
+  <viewport width="max-content" height="max-content"/>
+  <input>
+    <div direction="ltr" position="absolute" width="500px" height="100px">
+      <div direction="ltr" position="relative" flex-shrink="0" flex-basis="calc(40% - 20px)" height="20px"/>
+      <div direction="ltr" position="relative" flex-shrink="0" flex-basis="calc(20% + 10px)" height="20px"/>
+      <div direction="ltr" position="relative" flex-grow="1" flex-basis="calc(20%)" height="20px"/>
+    </div>
+  </input>
+  <expectations>
+    <node x="0" y="0" width="500" height="100">
+      <node x="0" y="0" width="180" height="20"/>
+      <node x="180" y="0" width="110" height="20"/>
+      <node x="290" y="0" width="210" height="20"/>
+    </node>
+  </expectations>
+</test>

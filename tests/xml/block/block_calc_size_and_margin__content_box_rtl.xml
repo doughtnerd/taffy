@@ -1,0 +1,21 @@
+<test name="block_calc_size_and_margin__content_box_rtl" use-rounding="true">
+  <viewport width="max-content" height="max-content"/>
+  <input>
+    <div display="block" box-sizing="content-box" direction="rtl" position="absolute" width="400px" height="200px">
+      <div display="block" box-sizing="content-box" direction="rtl" position="relative" width="calc(50% + 10px)" height="calc(20% - 10px)" margin-left="calc(10% + 5px)"/>
+      <div display="block" box-sizing="content-box" direction="rtl" position="relative" width="fit-content" height="10px" max-width="calc(30% + 1px)">
+        <div display="block" box-sizing="content-box" direction="rtl" position="relative" width="300px" height="10px"/>
+      </div>
+      <div display="block" box-sizing="content-box" direction="rtl" position="relative" height="10px" margin-left="calc(5% + 5px)" margin-right="calc(5% + 5px)"/>
+    </div>
+  </input>
+  <expectations>
+    <node x="0" y="0" width="400" height="200">
+      <node x="190" y="0" width="210" height="30"/>
+      <node x="279" y="30" width="121" height="10">
+        <node x="-179" y="0" width="300" height="10"/>
+      </node>
+      <node x="25" y="40" width="350" height="10"/>
+    </node>
+  </expectations>
+</test>

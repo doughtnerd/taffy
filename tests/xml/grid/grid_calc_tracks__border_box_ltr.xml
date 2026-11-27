@@ -1,0 +1,19 @@
+<test name="grid_calc_tracks__border_box_ltr" use-rounding="true">
+  <viewport width="max-content" height="max-content"/>
+  <input>
+    <div display="grid" direction="ltr" position="absolute" width="400px" height="200px" grid-template-rows="calc(50% - 20px) repeat(2, min(10%, 30px))" grid-template-columns="calc(25% + 10px) minmax(calc(10% + 5px), 1fr) fit-content(calc(20% - 10px))">
+      <div direction="ltr" position="relative"/>
+      <div direction="ltr" position="relative"/>
+      <div direction="ltr" position="relative" width="200px"/>
+      <div direction="ltr" position="relative"/>
+    </div>
+  </input>
+  <expectations>
+    <node x="0" y="0" width="400" height="200" resolved-rows="80px 20px 20px" resolved-columns="110px 90px 200px">
+      <node x="0" y="0" width="110" height="80"/>
+      <node x="110" y="0" width="90" height="80"/>
+      <node x="200" y="0" width="200" height="80"/>
+      <node x="0" y="80" width="110" height="20"/>
+    </node>
+  </expectations>
+</test>
