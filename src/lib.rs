@@ -124,6 +124,8 @@ pub use crate::tree::traits::*;
 #[doc(inline)]
 pub use crate::util::print_tree;
 
+#[cfg(all(feature = "parse", feature = "calc"))]
+pub use parse::ParseWithCalc;
 #[cfg(feature = "parse")]
 pub use parse::{ParseError, ParseResult};
 

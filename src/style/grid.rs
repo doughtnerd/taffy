@@ -334,7 +334,10 @@ pub enum GridAutoFlow {
 
 #[cfg(feature = "parse")]
 impl FromCss for GridAutoFlow {
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        parser: &mut Parser<'i>,
+        _cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         let mut axis: Option<&'static str> = None;
         let mut dense = false;
 
@@ -475,7 +478,10 @@ fn saturating_u16(value: i32) -> u16 {
 
 #[cfg(feature = "parse")]
 impl<S: CheapCloneStr> FromCss for GridPlacement<S> {
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        parser: &mut Parser<'i>,
+        _cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         let mut span = false;
         let mut number = None;
         let mut ident = None;
@@ -531,7 +537,7 @@ impl<S: CheapCloneStr> FromCss for GridPlacement<S> {
 impl<S: CheapCloneStr> core::str::FromStr for GridPlacement<S> {
     type Err = ParseError;
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        parse_css_str_entirely(input)
+        parse_css_str_entirely(input, &mut crate::util::parse::ParseContext::none())
     }
 }
 
@@ -790,7 +796,10 @@ impl From<MinTrackSizingFunction> for MaxTrackSizingFunction {
 
 #[cfg(feature = "parse")]
 impl FromCss for MaxTrackSizingFunction {
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        parser: &mut Parser<'i>,
+        cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         let token = parser.next()?.clone();
         match token {
             Token::Percentage { unit_value, .. } => Ok(Self::percent(unit_value)),
@@ -807,9 +816,22 @@ impl FromCss for MaxTrackSizingFunction {
                 match token {
                     Token::Percentage { unit_value, .. } => Ok(Self::fit_content_percent(unit_value)),
                     Token::Dimension { unit, value, .. } if unit == "px" => Ok(Self::fit_content_px(value)),
+                    #[cfg(feature = "calc")]
+                    Token::Function(ref name) if crate::style::calc::parse::is_math_function(name) => {
+                        use crate::style::calc::{parse::ParsedCalc, sealed::SimplifiedCalc};
+                        Ok(match crate::style::calc::parse::parse_calc_value(name, parser, cx)? {
+                            ParsedCalc::Simple(SimplifiedCalc::Length(v)) => Self::fit_content_px(v),
+                            ParsedCalc::Simple(SimplifiedCalc::Percent(v)) => Self::fit_content_percent(v),
+                            ParsedCalc::Handle(handle) => Self::fit_content_calc(handle),
+                        })
+                    }
                     _ => Err(CssParseError::unexpected_token())?,
                 }
             }),
+            #[cfg(feature = "calc")]
+            Token::Function(ref name) if crate::style::calc::parse::is_math_function(name) => {
+                Ok(crate::style::calc::parse::parse_calc_value(name, parser, cx)?.into_value())
+            }
             _ => Err(CssParseError::unexpected_token())?,
         }
     }
@@ -1236,7 +1258,10 @@ impl From<MaxTrackSizingFunction> for MinTrackSizingFunction {
 
 #[cfg(feature = "parse")]
 impl FromCss for MinTrackSizingFunction {
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        parser: &mut Parser<'i>,
+        cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         let token = parser.next()?.clone();
         match token {
             Token::Percentage { unit_value, .. } => Ok(Self::percent(unit_value)),
@@ -1247,6 +1272,10 @@ impl FromCss for MinTrackSizingFunction {
                 "max-content" => Ok(Self::max_content()),
                 _ => Err(CssParseError::unexpected_token())?,
             },
+            #[cfg(feature = "calc")]
+            Token::Function(ref name) if crate::style::calc::parse::is_math_function(name) => {
+                Ok(crate::style::calc::parse::parse_calc_value(name, parser, cx)?.into_value())
+            }
             _ => Err(CssParseError::unexpected_token())?,
         }
     }
@@ -1254,6 +1283,25 @@ impl FromCss for MinTrackSizingFunction {
 
 #[cfg(feature = "parse")]
 from_str_from_css!(MinTrackSizingFunction);
+#[cfg(feature = "parse")]
+crate::util::parse::parse_with_calc_from_css!(
+    MinTrackSizingFunction,
+    MaxTrackSizingFunction,
+    TrackSizingFunction,
+    GridAutoTracks,
+);
+#[cfg(all(feature = "parse", feature = "calc"))]
+impl<S: CheapCloneStr> crate::util::parse::ParseWithCalc for GridTemplateComponent<S> {
+    fn parse_with_calc(input: &str, calcs: &mut crate::style::CalcStore) -> crate::util::parse::ParseResult<Self> {
+        parse_css_str_entirely(input, &mut crate::util::parse::ParseContext::with_calcs(calcs))
+    }
+}
+#[cfg(all(feature = "parse", feature = "calc"))]
+impl<S: CheapCloneStr, Track: FromCss + Debug> crate::util::parse::ParseWithCalc for GridTemplateTracks<S, Track> {
+    fn parse_with_calc(input: &str, calcs: &mut crate::style::CalcStore) -> crate::util::parse::ParseResult<Self> {
+        parse_css_str_entirely(input, &mut crate::util::parse::ParseContext::with_calcs(calcs))
+    }
+}
 
 #[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for MinTrackSizingFunction {
@@ -1553,14 +1601,17 @@ impl From<Dimension> for TrackSizingFunction {
 
 #[cfg(feature = "parse")]
 impl FromCss for TrackSizingFunction {
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        parser: &mut Parser<'i>,
+        cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         // Try to parse a minmax() function
-        if let Ok(value) = parser.try_parse(|parser| {
+        if let Ok(value) = cx.try_parse(parser, |parser, cx| {
             parser.expect_function_matching("minmax")?;
             parser.parse_nested_block(|parser| {
-                let min = MinTrackSizingFunction::from_css(parser)?;
+                let min = MinTrackSizingFunction::from_css(parser, cx)?;
                 parser.expect_comma()?;
-                let max = MaxTrackSizingFunction::from_css(parser)?;
+                let max = MaxTrackSizingFunction::from_css(parser, cx)?;
 
                 Ok(Self { min, max })
             })
@@ -1569,7 +1620,7 @@ impl FromCss for TrackSizingFunction {
         }
 
         // Else parse a max track sizing function
-        let max = MaxTrackSizingFunction::from_css(parser)?;
+        let max = MaxTrackSizingFunction::from_css(parser, cx)?;
         let min = max.into();
         Ok(Self { min, max })
     }
@@ -1624,7 +1675,10 @@ impl TryFrom<&str> for RepetitionCount {
 
 #[cfg(feature = "parse")]
 impl FromCss for RepetitionCount {
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        parser: &mut Parser<'i>,
+        _cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         match parser.next()?.clone() {
             Token::Number { int_value: Some(value), .. } if value.is_positive() => {
                 Ok(Self::Count(saturating_u16(value)))
@@ -1750,14 +1804,17 @@ impl<S: CheapCloneStr> From<MinMax<MinTrackSizingFunction, MaxTrackSizingFunctio
 
 #[cfg(feature = "parse")]
 impl<S: CheapCloneStr> FromCss for GridTemplateComponent<S> {
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        parser: &mut Parser<'i>,
+        cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         // Try to parse a minmax() function
-        if let Ok(value) = parser.try_parse(|parser| {
+        if let Ok(value) = cx.try_parse(parser, |parser, cx| {
             parser.expect_function_matching("repeat")?;
             parser.parse_nested_block(|parser| {
-                let count = RepetitionCount::from_css(parser)?;
+                let count = RepetitionCount::from_css(parser, cx)?;
                 parser.expect_comma()?;
-                let tracks = GridTemplateTracks::<S, TrackSizingFunction>::from_css(parser)?;
+                let tracks = GridTemplateTracks::<S, TrackSizingFunction>::from_css(parser, cx)?;
 
                 Ok(Self::Repeat(GridTemplateRepetition { count, tracks: tracks.tracks, line_names: tracks.line_names }))
             })
@@ -1766,7 +1823,7 @@ impl<S: CheapCloneStr> FromCss for GridTemplateComponent<S> {
         }
 
         // Else parse a track sizing function
-        let track_sizing_function = TrackSizingFunction::from_css(parser)?;
+        let track_sizing_function = TrackSizingFunction::from_css(parser, cx)?;
         Ok(Self::Single(track_sizing_function))
     }
 }
@@ -1774,7 +1831,7 @@ impl<S: CheapCloneStr> FromCss for GridTemplateComponent<S> {
 impl<S: CheapCloneStr> core::str::FromStr for GridTemplateComponent<S> {
     type Err = ParseError;
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        parse_css_str_entirely(input)
+        parse_css_str_entirely(input, &mut crate::util::parse::ParseContext::none())
     }
 }
 
@@ -1796,7 +1853,10 @@ impl<S: CheapCloneStr, Track> Default for GridTemplateTracks<S, Track> {
 
 #[cfg(feature = "parse")]
 impl<S: CheapCloneStr, Track: FromCss + Debug> FromCss for GridTemplateTracks<S, Track> {
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        parser: &mut Parser<'i>,
+        cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         fn try_parse_line_names<'i, S: CheapCloneStr>(parser: &mut Parser<'i>) -> CssParseResult<'i, Vec<S>> {
             parser.try_parse(|parser| {
                 parser.expect_square_bracket_block()?;
@@ -1816,7 +1876,7 @@ impl<S: CheapCloneStr, Track: FromCss + Debug> FromCss for GridTemplateTracks<S,
         tracks.line_names.push(try_parse_line_names(parser).unwrap_or_default());
 
         while !parser.is_exhausted() {
-            tracks.tracks.push(Track::from_css(parser)?);
+            tracks.tracks.push(Track::from_css(parser, cx)?);
             tracks.line_names.push(try_parse_line_names(parser).unwrap_or_default());
         }
 
@@ -1831,7 +1891,7 @@ impl<S: CheapCloneStr, Track: FromCss + Debug> FromCss for GridTemplateTracks<S,
 impl<S: CheapCloneStr, Track: FromCss + Debug> core::str::FromStr for GridTemplateTracks<S, Track> {
     type Err = ParseError;
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        parse_css_str_entirely(input)
+        parse_css_str_entirely(input, &mut crate::util::parse::ParseContext::none())
     }
 }
 
@@ -1841,10 +1901,13 @@ pub struct GridAutoTracks(pub Vec<TrackSizingFunction>);
 
 #[cfg(feature = "parse")]
 impl FromCss for GridAutoTracks {
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        parser: &mut Parser<'i>,
+        cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         let mut tracks = Self::default();
         while !parser.is_exhausted() {
-            tracks.0.push(TrackSizingFunction::from_css(parser)?);
+            tracks.0.push(TrackSizingFunction::from_css(parser, cx)?);
         }
         if tracks.0.is_empty() {
             return Err(CssParseError::from_basic_kind(cssparser::BasicParseErrorKind::EndOfInput));

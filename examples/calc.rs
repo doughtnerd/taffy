@@ -1,4 +1,5 @@
-//! `calc()` values with `TaffyTree`: expressions stored in the tree and resolved during layout.
+//! `calc()` values with `TaffyTree`: expressions stored in the tree and resolved during layout, built as `Calc`
+//! expressions or parsed from CSS with the `parse` feature.
 
 // NOTE: This example requires the `calc` feature flag to be enabled (it is by default).
 
@@ -25,7 +26,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![Calc::Length(20.0), Calc::Percent(0.1), Calc::Length(40.0)],
     ))?;
 
-    // padding-left and -right: calc(2% + 4px)
+    // padding-left and -right: calc(2% + 4px), parsed from CSS with the `parse` feature
+    #[cfg(feature = "parse")]
+    let padding: LengthPercentage = taffy.parse_value("calc(2% + 4px)")?;
+    #[cfg(not(feature = "parse"))]
     let padding: LengthPercentage = taffy.new_calc(Calc::Sum(vec![Calc::Percent(0.02), Calc::Length(4.0)]))?;
 
     // A percentage-free expression simplifies to a plain length, as CSS does when it parses one: calc(10px * 2) is 20px

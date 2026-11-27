@@ -126,4 +126,95 @@ mod taffy_tree_calc {
         assert!(t.new_calc::<Dimension>(Calc::Sum(vec![Calc::Length(1.0), Calc::Number(2.0)])).is_err());
         assert!(t.new_calc::<Dimension>(Calc::Product(vec![Calc::Length(1.0), Calc::Length(2.0)])).is_err());
     }
+
+    #[cfg(all(feature = "parse", feature = "grid"))]
+    #[test]
+    fn css_strings_parse_into_the_tree() {
+        // grid-template-columns: calc(25% + 10px) minmax(calc(10% + 5px), 1fr) fit-content(calc(20% - 10px));
+        // grid-template-rows: calc(50% - 20px)
+        let mut t: TaffyTree<()> = TaffyTree::new();
+        let columns: taffy::GridTemplateTracks<String, GridTemplateComponent<String>> =
+            t.parse_value("calc(25% + 10px) minmax(calc(10% + 5px), 1fr) fit-content(calc(20% - 10px))").unwrap();
+        let rows: taffy::GridTemplateTracks<String, GridTemplateComponent<String>> =
+            t.parse_value("calc(50% - 20px)").unwrap();
+        let kids = [
+            t.new_leaf(Style::default()).unwrap(),
+            t.new_leaf(Style::default()).unwrap(),
+            t.new_leaf(sized(length(200.0), auto())).unwrap(),
+        ];
+        let root = t
+            .new_with_children(
+                Style {
+                    display: Display::Grid,
+                    grid_template_columns: columns.tracks,
+                    grid_template_rows: rows.tracks,
+                    ..sized(length(400.0), length(200.0))
+                },
+                &kids,
+            )
+            .unwrap();
+        t.compute_layout(root, Size::MAX_CONTENT).unwrap();
+        assert_eq!(rect(&t, kids[0]), [0.0, 0.0, 110.0, 80.0]);
+        assert_eq!(rect(&t, kids[1]), [110.0, 0.0, 90.0, 80.0]);
+        assert_eq!(rect(&t, kids[2]), [200.0, 0.0, 200.0, 80.0]);
+    }
+
+    #[cfg(feature = "parse")]
+    #[test]
+    fn css_strings_with_math_functions() {
+        let mut t: TaffyTree<()> = TaffyTree::new();
+        let w: Dimension = t.parse_value("min(25%, 60px)").unwrap();
+        let h: Dimension = t.parse_value("clamp(10px, 10%, 20px)").unwrap();
+        let m: LengthPercentageAuto = t.parse_value("calc(10% - 10px)").unwrap();
+        let p: LengthPercentage = t.parse_value("max(5%, 4px)").unwrap();
+        let a = t
+            .new_leaf(Style {
+                margin: Rect { left: m, right: zero(), top: zero(), bottom: zero() },
+                padding: Rect { left: p, right: zero(), top: zero(), bottom: zero() },
+                ..sized(w, h)
+            })
+            .unwrap();
+        let root_style = Style { align_items: AlignItems::FLEX_START, ..sized(length(400.0), length(300.0)) };
+        let root = t.new_with_children(root_style, &[a]).unwrap();
+        t.compute_layout(root, Size::MAX_CONTENT).unwrap();
+        // width min(100, 60) = 60; height clamp(10, 30, 20) = 20; margin 40 - 10 = 30; padding max(20, 4) = 20
+        assert_eq!(rect(&t, a), [30.0, 0.0, 60.0, 20.0]);
+        assert_eq!(t.layout(a).unwrap().padding.left, 20.0);
+
+        // Percentage-free expressions simplify, with or without a store; others need one
+        assert_eq!(t.parse_value::<Dimension>("calc(2 * (10px + 5px))").unwrap(), Dimension::length(30.0));
+        assert_eq!("calc(2 * (10px + 5px))".parse::<Dimension>().unwrap(), Dimension::length(30.0));
+        assert_eq!("calc(50% * 2)".parse::<LengthPercentage>().unwrap(), LengthPercentage::percent(1.0));
+        assert!("calc(50% - 12px)".parse::<Dimension>().is_err());
+        assert_eq!("fit-content(calc(10px * 3))".parse::<Dimension>().unwrap(), Dimension::fit_content_px(30.0));
+        assert!(t.parse_value::<Dimension>("fit-content(calc(50% - 1px))").unwrap().is_fit_content_calc());
+        assert!(t.parse_value::<Dimension>("calc(10px + 5)").is_err());
+        assert!(t.parse_value::<Dimension>("calc(2em)").is_err());
+    }
+
+    #[cfg(feature = "parse")]
+    #[test]
+    fn a_failed_parse_stores_nothing() {
+        let mut store = taffy::CalcStore::new();
+        assert!(store.parse_value::<Dimension>("calc(10% + 5px) extra").is_err());
+        assert!(store.parse_value::<Dimension>("fit-content(calc(10% + 5px) 1px)").is_err());
+        #[cfg(feature = "grid")]
+        {
+            use taffy::{GridTemplateTracks, TrackSizingFunction};
+            assert!(store.parse_value::<TrackSizingFunction>("minmax(calc(10% + 5px), bogus)").is_err());
+            assert!(
+                store
+                    .parse_value::<GridTemplateTracks<String, GridTemplateComponent<String>>>(
+                        "calc(10% + 5px) repeat(2, calc(20% + 1px)) nope"
+                    )
+                    .is_err()
+            );
+            assert!(store.parse_value::<GridTemplateComponent<String>>("repeat(2, calc(20% + 1px) nope)").is_err());
+        }
+        assert!(store.is_empty(), "{} expressions leaked", store.len());
+
+        let kept: Dimension = store.parse_value("calc(10% + 5px)").unwrap();
+        assert_eq!(store.len(), 1);
+        assert!(store.get(kept.into_raw().calc_value()).is_some());
+    }
 }

@@ -35,18 +35,126 @@ impl std::error::Error for ParseError {}
 /// Result type for parsing a type from string
 pub type ParseResult<T> = Result<T, ParseError>;
 
+/// What parsing needs beyond its input: where `calc()` expressions that don't simplify to a plain value are stored.
+/// Without a store (`FromStr`), such an expression is a parse error.
+pub(crate) struct ParseContext<'a> {
+    /// The store for `calc()` expressions, if any
+    #[cfg(feature = "calc")]
+    calcs: Option<&'a mut crate::style::CalcStore>,
+    /// The handles this parse has stored, so that a failed parse can remove them
+    #[cfg(feature = "calc")]
+    stored: crate::util::sys::Vec<crate::style::CalcHandle>,
+    /// Ties the lifetime when `calc` is disabled
+    #[cfg(not(feature = "calc"))]
+    _marker: core::marker::PhantomData<&'a mut ()>,
+}
+
+impl<'a> ParseContext<'a> {
+    /// A context without a `calc()` store
+    pub(crate) fn none() -> Self {
+        Self {
+            #[cfg(feature = "calc")]
+            calcs: None,
+            #[cfg(feature = "calc")]
+            stored: crate::util::sys::Vec::new(),
+            #[cfg(not(feature = "calc"))]
+            _marker: core::marker::PhantomData,
+        }
+    }
+
+    /// A context that stores `calc()` expressions in `calcs`
+    #[cfg(feature = "calc")]
+    pub(crate) fn with_calcs(calcs: &'a mut crate::style::CalcStore) -> Self {
+        Self { calcs: Some(calcs), stored: crate::util::sys::Vec::new() }
+    }
+
+    /// Stores a validated expression, if there is a store
+    #[cfg(feature = "calc")]
+    pub(crate) fn store(&mut self, calc: crate::style::Calc) -> Option<crate::style::CalcHandle> {
+        let handle = self.calcs.as_deref_mut()?.insert_unchecked(calc);
+        self.stored.push(handle);
+        Some(handle)
+    }
+
+    /// A point to [`rollback`](Self::rollback) to
+    pub(crate) fn checkpoint(&self) -> usize {
+        #[cfg(feature = "calc")]
+        return self.stored.len();
+        #[cfg(not(feature = "calc"))]
+        0
+    }
+
+    /// Removes the expressions stored since `checkpoint`, for a parse that failed after storing them
+    pub(crate) fn rollback(&mut self, checkpoint: usize) {
+        #[cfg(feature = "calc")]
+        if let Some(calcs) = self.calcs.as_deref_mut() {
+            for handle in self.stored.drain(checkpoint..) {
+                calcs.remove(handle);
+            }
+        }
+        #[cfg(not(feature = "calc"))]
+        let _ = checkpoint;
+    }
+
+    /// Runs `parse` with [`Parser::try_parse`], removing what it stored if it fails
+    pub(crate) fn try_parse<'i, T>(
+        &mut self,
+        parser: &mut Parser<'i>,
+        parse: impl FnOnce(&mut Parser<'i>, &mut Self) -> CssParseResult<'i, T>,
+    ) -> CssParseResult<'i, T> {
+        let checkpoint = self.checkpoint();
+        let result = parser.try_parse(|parser| parse(parser, self));
+        if result.is_err() {
+            self.rollback(checkpoint);
+        }
+        result
+    }
+}
+
 /// Trait for parsing a type from a `cssparser::Parser` input
 pub(crate) trait FromCss: Sized {
     /// Parse type from a `cssparser::Parser` input
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self>;
+    fn from_css<'i>(parser: &mut Parser<'i>, cx: &mut ParseContext<'_>) -> CssParseResult<'i, Self>;
 }
 
 /// Parse a string into a type that implements `FromCss`, ensuring that the
 /// entire input string is consumed.
-pub(crate) fn parse_css_str_entirely<T: FromCss>(input: &str) -> Result<T, ParseError> {
+///
+/// A failed parse removes any `calc()` expressions it stored.
+pub(crate) fn parse_css_str_entirely<T: FromCss>(input: &str, cx: &mut ParseContext<'_>) -> Result<T, ParseError> {
     let mut parser = Parser::new(input);
-    parser.parse_entirely(|parser| T::from_css(parser)).map_err(|err| ParseError(err.to_string()))
+    let result = parser.parse_entirely(|parser| T::from_css(parser, cx)).map_err(|err| ParseError(err.to_string()));
+    if result.is_err() {
+        cx.rollback(0);
+    }
+    result
 }
+
+/// A style value type that can be parsed with a [`CalcStore`](crate::CalcStore), so that it can hold a `calc()` that
+/// doesn't simplify to a plain value: see [`CalcStore::parse_value`](crate::CalcStore::parse_value) and
+/// [`TaffyTree::parse_value`](crate::TaffyTree::parse_value). (`FromStr` parses the same syntax without a store, and
+/// fails on such a `calc()`.)
+#[cfg(feature = "calc")]
+pub trait ParseWithCalc: Sized {
+    /// Parses `input`, storing any `calc()` expression that needs a handle in `calcs`
+    fn parse_with_calc(input: &str, calcs: &mut crate::style::CalcStore) -> ParseResult<Self>;
+}
+
+/// Implements [`ParseWithCalc`] for types that implement `FromCss`
+macro_rules! parse_with_calc_from_css {
+    ($($(#[$meta:meta])* $ty:ty),+ $(,)?) => {
+        $(
+            $(#[$meta])*
+            #[cfg(feature = "calc")]
+            impl $crate::util::parse::ParseWithCalc for $ty {
+                fn parse_with_calc(input: &str, calcs: &mut $crate::style::CalcStore) -> $crate::util::parse::ParseResult<Self> {
+                    $crate::util::parse::parse_css_str_entirely(input, &mut $crate::util::parse::ParseContext::with_calcs(calcs))
+                }
+            }
+        )+
+    };
+}
+pub(crate) use parse_with_calc_from_css;
 
 /// Automatically implement `FromStr` for a type that already implemented `FromCss`
 macro_rules! from_str_from_css {
@@ -55,7 +163,7 @@ macro_rules! from_str_from_css {
         impl core::str::FromStr for $ty {
             type Err = $crate::ParseError;
             fn from_str(input: &str) -> Result<Self, Self::Err> {
-                $crate::util::parse::parse_css_str_entirely(input)
+                $crate::util::parse::parse_css_str_entirely(input, &mut $crate::util::parse::ParseContext::none())
             }
         }
     };
@@ -80,7 +188,7 @@ macro_rules! impl_parse_for_keyword_enum {
 
         // Impl FromCss for the type
         impl $crate::util::parse::FromCss for $ty {
-            fn from_css<'i>(input: &mut cssparser::Parser<'i>) -> $crate::util::parse::CssParseResult<'i, Self> {
+            fn from_css<'i>(input: &mut cssparser::Parser<'i>, _cx: &mut $crate::util::parse::ParseContext<'_>) -> $crate::util::parse::CssParseResult<'i, Self> {
 
                 // Parse an ident (or return an error)
                 let ident = input.expect_ident()?;
@@ -106,7 +214,7 @@ macro_rules! impl_parse_for_keyword_enum {
         impl core::str::FromStr for $ty {
             type Err = $crate::ParseError;
             fn from_str(input: &str) -> Result<Self, Self::Err> {
-                $crate::util::parse::parse_css_str_entirely(input)
+                $crate::util::parse::parse_css_str_entirely(input, &mut $crate::util::parse::ParseContext::none())
             }
         }
     };

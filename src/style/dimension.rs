@@ -28,16 +28,25 @@ impl FromPercent for LengthPercentage {
 
 #[cfg(feature = "parse")]
 impl FromCss for LengthPercentage {
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        parser: &mut Parser<'i>,
+        cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         match parser.next()?.clone() {
             Token::Percentage { unit_value, .. } => Ok(Self::percent(unit_value)),
             Token::Dimension { unit, value, .. } if unit == "px" => Ok(Self::length(value)),
+            #[cfg(feature = "calc")]
+            Token::Function(ref name) if crate::style::calc::parse::is_math_function(name) => {
+                Ok(crate::style::calc::parse::parse_calc_value(name, parser, cx)?.into_value())
+            }
             _ => Err(CssParseError::unexpected_token())?,
         }
     }
 }
 #[cfg(feature = "parse")]
 from_str_from_css!(LengthPercentage);
+#[cfg(feature = "parse")]
+crate::util::parse::parse_with_calc_from_css!(LengthPercentage, LengthPercentageAuto, Dimension);
 
 impl LengthPercentage {
     /// An absolute length in some abstract units. Users of Taffy may define what they correspond
@@ -173,11 +182,18 @@ impl From<LengthPercentage> for LengthPercentageAuto {
 
 #[cfg(feature = "parse")]
 impl FromCss for LengthPercentageAuto {
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        parser: &mut Parser<'i>,
+        cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         match parser.next()?.clone() {
             Token::Percentage { unit_value, .. } => Ok(Self::percent(unit_value)),
             Token::Dimension { unit, value, .. } if unit == "px" => Ok(Self::length(value)),
             Token::Ident(ident) if ident == "auto" => Ok(Self::auto()),
+            #[cfg(feature = "calc")]
+            Token::Function(ref name) if crate::style::calc::parse::is_math_function(name) => {
+                Ok(crate::style::calc::parse::parse_calc_value(name, parser, cx)?.into_value())
+            }
             _ => Err(CssParseError::unexpected_token())?,
         }
     }
@@ -357,7 +373,10 @@ impl From<LengthPercentageAuto> for Dimension {
 
 #[cfg(feature = "parse")]
 impl FromCss for Dimension {
-    fn from_css<'i>(parser: &mut Parser<'i>) -> CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        parser: &mut Parser<'i>,
+        cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> CssParseResult<'i, Self> {
         let token = parser.next()?.clone();
         match token {
             Token::Percentage { unit_value, .. } => Ok(Self::percent(unit_value)),
@@ -376,9 +395,22 @@ impl FromCss for Dimension {
                 match token {
                     Token::Percentage { unit_value, .. } => Ok(Self::fit_content_percent(unit_value)),
                     Token::Dimension { unit, value, .. } if unit == "px" => Ok(Self::fit_content_px(value)),
+                    #[cfg(feature = "calc")]
+                    Token::Function(ref name) if crate::style::calc::parse::is_math_function(name) => {
+                        use crate::style::calc::{parse::ParsedCalc, sealed::SimplifiedCalc};
+                        Ok(match crate::style::calc::parse::parse_calc_value(name, parser, cx)? {
+                            ParsedCalc::Simple(SimplifiedCalc::Length(v)) => Self::fit_content_px(v),
+                            ParsedCalc::Simple(SimplifiedCalc::Percent(v)) => Self::fit_content_percent(v),
+                            ParsedCalc::Handle(handle) => Self::fit_content_calc(handle),
+                        })
+                    }
                     _ => Err(CssParseError::unexpected_token())?,
                 }
             }),
+            #[cfg(feature = "calc")]
+            Token::Function(ref name) if crate::style::calc::parse::is_math_function(name) => {
+                Ok(crate::style::calc::parse::parse_calc_value(name, parser, cx)?.into_value())
+            }
             _ => Err(CssParseError::unexpected_token())?,
         }
     }

@@ -618,7 +618,10 @@ impl core::ops::BitOrAssign for Contain {
 
 #[cfg(feature = "parse")]
 impl crate::util::parse::FromCss for Contain {
-    fn from_css<'i>(input: &mut crate::util::parse::Parser<'i>) -> crate::util::parse::CssParseResult<'i, Self> {
+    fn from_css<'i>(
+        input: &mut crate::util::parse::Parser<'i>,
+        _cx: &mut crate::util::parse::ParseContext<'_>,
+    ) -> crate::util::parse::CssParseResult<'i, Self> {
         /// Duplicate-detection bit for the ignored `style` keyword, which does not map to a
         /// `Contain` flag
         const STYLE_BIT: u8 = 1 << 6;
