@@ -131,6 +131,55 @@ pub enum RoundingStrategy {
     ToZero,
 }
 
+/// A [`Calc`] expression that simplifies to a plain value, as CSS simplifies `calc()` when it parses it
+/// ([`Calc::simplify`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SimplifiedCalc {
+    /// A length in pixels (`calc(10px + 5px)`, `min(10px, 2em)` once `em` is converted)
+    Length(f32),
+    /// A percentage, as a fraction (`calc(50% * 2)`)
+    Percent(f32),
+}
+
+/// A style value that can hold a `calc()` expression: built from a simplified value or from a handle.
+/// [`TaffyTree::calc_value`](crate::TaffyTree::calc_value) and [`CalcStore::value`] return any of them.
+pub trait FromCalc: Sized {
+    /// The value for a simplified expression (a plain length or percentage)
+    fn from_simplified(value: SimplifiedCalc) -> Self;
+    /// The value for an expression stored behind a handle
+    fn from_calc_handle(handle: CalcHandle) -> Self;
+}
+
+/// Implements [`FromCalc`] for types with `length`, `percent` and `calc` constructors.
+macro_rules! impl_from_calc {
+    ($($(#[$meta:meta])* $ty:ty),+ $(,)?) => {
+        $(
+            $(#[$meta])*
+            impl FromCalc for $ty {
+                fn from_simplified(value: SimplifiedCalc) -> Self {
+                    match value {
+                        SimplifiedCalc::Length(v) => <$ty>::length(v),
+                        SimplifiedCalc::Percent(v) => <$ty>::percent(v),
+                    }
+                }
+                fn from_calc_handle(handle: CalcHandle) -> Self {
+                    <$ty>::calc(handle)
+                }
+            }
+        )+
+    };
+}
+
+impl_from_calc!(
+    crate::style::LengthPercentage,
+    crate::style::LengthPercentageAuto,
+    crate::style::Dimension,
+    #[cfg(feature = "grid")]
+    crate::style::MinTrackSizingFunction,
+    #[cfg(feature = "grid")]
+    crate::style::MaxTrackSizingFunction,
+);
+
 /// Why a [`Calc`] expression is invalid.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CalcError {
@@ -161,15 +210,21 @@ impl std::error::Error for CalcError {}
 /// The type of a value in an expression: the powers of length and angle in it (`px` is length¹, `px / px` a number).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CalcType {
+    /// The power of length (percentages count as lengths)
     length: i8,
+    /// The power of angle
     angle: i8,
 }
 
 impl CalcType {
+    /// A plain number
     const NUMBER: Self = Self { length: 0, angle: 0 };
+    /// A length (or percentage)
     const LENGTH: Self = Self { length: 1, angle: 0 };
+    /// An angle
     const ANGLE: Self = Self { length: 0, angle: 1 };
 
+    /// True for a plain number
     fn is_number(self) -> bool {
         self == Self::NUMBER
     }
@@ -185,6 +240,60 @@ impl Calc {
         }
     }
 
+    /// The plain length or percentage the expression simplifies to, if any: an expression without percentages is a
+    /// length, and a linear one whose only term is a percentage is that percentage. CSS simplifies `calc()` this way
+    /// when it parses it, and it matters to layout: Taffy treats every `calc()` value as percentage-dependent, so one
+    /// resolves like a percentage of an indefinite size would (as `auto`, for a height in an auto-height parent) where a
+    /// plain length wouldn't. [`TaffyTree::calc_value`](crate::TaffyTree::calc_value) applies this.
+    pub fn simplify(&self) -> Option<SimplifiedCalc> {
+        if self.validate().is_err() {
+            return None;
+        }
+        if !self.uses_percentage() {
+            return Some(SimplifiedCalc::Length(self.resolve(0.0)));
+        }
+        match self.linear_parts()? {
+            (px, fraction) if px == 0.0 && fraction.is_finite() => Some(SimplifiedCalc::Percent(fraction as f32)),
+            _ => None,
+        }
+    }
+
+    /// `(px, fraction)` for an expression that is `px + fraction * basis` by its structure (sums, negations, products
+    /// with at most one non-number factor), else `None`.
+    fn linear_parts(&self) -> Option<(f64, f64)> {
+        Some(match self {
+            Calc::Length(v) => (f64::from(*v), 0.0),
+            Calc::Percent(p) => (0.0, f64::from(*p)),
+            Calc::Number(_) | Calc::Angle(_) | Calc::Function(..) | Calc::Invert(_) => return None,
+            Calc::Negate(c) => {
+                let (px, f) = c.linear_parts()?;
+                (-px, -f)
+            }
+            Calc::Sum(items) => items.iter().try_fold((0.0, 0.0), |(px, f), c| {
+                let (p2, f2) = c.linear_parts()?;
+                Some((px + p2, f + f2))
+            })?,
+            Calc::Product(items) => {
+                let mut scale = 1.0;
+                let mut term = None;
+                for item in items {
+                    match item {
+                        Calc::Number(n) => scale *= f64::from(*n),
+                        Calc::Invert(inner) if matches!(**inner, Calc::Number(_)) => {
+                            if let Calc::Number(n) = **inner {
+                                scale /= f64::from(n);
+                            }
+                        }
+                        other if term.is_none() => term = Some(other.linear_parts()?),
+                        _ => return None,
+                    }
+                }
+                let (px, f) = term?;
+                (px * scale, f * scale)
+            }
+        })
+    }
+
     /// True when the expression contains a percentage, so its value depends on the basis it's resolved against.
     pub fn uses_percentage(&self) -> bool {
         match self {
@@ -197,6 +306,7 @@ impl Calc {
         }
     }
 
+    /// The expression's type, or why it has none
     fn type_of(&self) -> Result<CalcType, CalcError> {
         fn same(items: &[Calc]) -> Result<CalcType, CalcError> {
             let mut iter = items.iter();
@@ -348,11 +458,13 @@ fn trunc(x: f64) -> f64 {
     if x.is_finite() { x - x % 1.0 } else { x }
 }
 
+/// `x` rounded down, without `std`
 fn floor(x: f64) -> f64 {
     let t = trunc(x);
     if t > x { t - 1.0 } else { t }
 }
 
+/// `x` rounded up, without `std`
 fn ceil(x: f64) -> f64 {
     let t = trunc(x);
     if t < x { t + 1.0 } else { t }
@@ -373,10 +485,12 @@ fn pick(items: &[Calc], basis: f64, better: fn(f64, f64) -> bool) -> f64 {
     best
 }
 
+/// The `i`th argument's value (NaN when it's missing)
 fn arg(items: &[Calc], i: usize, basis: f64) -> f64 {
     items.get(i).map_or(f64::NAN, |c| c.eval(basis))
 }
 
+/// A math function's value
 fn eval_function(f: CalcFunction, items: &[Calc], basis: f64) -> f64 {
     let a = |i| arg(items, i, basis);
     match f {
@@ -436,6 +550,7 @@ fn eval_function(f: CalcFunction, items: &[Calc], basis: f64) -> f64 {
     }
 }
 
+/// `clamp()`, with optional bounds; NaN in any argument is NaN
 fn clamp(min: Option<f64>, value: f64, max: Option<f64>) -> f64 {
     if min.is_some_and(f64::is_nan) || value.is_nan() || max.is_some_and(f64::is_nan) {
         return f64::NAN;
@@ -528,14 +643,20 @@ fn modulo(a: f64, b: f64, is_mod: bool) -> f64 {
 /// generation, so a handle kept after [`remove`](CalcStore::remove) resolves to 0 rather than to a later expression.
 #[derive(Clone, Debug, Default)]
 pub struct CalcStore {
+    /// The slots, by index
     entries: Vec<CalcEntry>,
+    /// The indices of empty slots
     free: Vec<u32>,
+    /// How many slots hold an expression
     len: usize,
 }
 
 #[derive(Clone, Debug)]
+/// One slot of a [`CalcStore`]
 struct CalcEntry {
+    /// Bumped each time the slot is emptied, so old handles stop matching it
     generation: u32,
+    /// The expression, if the slot holds one
     calc: Option<Calc>,
 }
 
@@ -569,6 +690,17 @@ impl CalcStore {
             }
         };
         Self::handle(index, self.entries[index as usize].generation)
+    }
+
+    /// A style value for an expression: a plain length or percentage when it simplifies to one ([`Calc::simplify`],
+    /// as CSS does when it parses `calc()`), else a handle to the expression, stored here. Errors when the expression
+    /// doesn't resolve to a length.
+    pub fn value<T: FromCalc>(&mut self, calc: Calc) -> Result<T, CalcError> {
+        calc.validate()?;
+        Ok(match calc.simplify() {
+            Some(simple) => T::from_simplified(simple),
+            None => T::from_calc_handle(self.insert_unchecked(calc)),
+        })
     }
 
     /// Removes an expression, returning it; `None` for a handle that isn't (or is no longer) in the store.
@@ -616,11 +748,13 @@ impl CalcStore {
         self.len = 0;
     }
 
+    /// The handle for a slot and generation
     fn handle(index: u32, generation: u32) -> CalcHandle {
         let key = (u64::from(generation & GENERATION_MASK) << 32) | u64::from(index);
         CalcHandle::from_bits(key << 3)
     }
 
+    /// The slot a handle names, if its generation still matches
     fn index_of(&self, handle: CalcHandle) -> Option<usize> {
         let key = handle.to_bits() >> 3;
         let index = (key & u64::from(u32::MAX)) as usize;
@@ -761,6 +895,20 @@ mod tests {
         // acos(2) is NaN
         assert_eq!(product(vec![f(CalcFunction::Acos, vec![n(2.0)]), deg, px(1.0)]).resolve(0.0), 0.0);
         assert_eq!(f(CalcFunction::Sqrt, vec![px(4.0)]).validate(), Err(CalcError::InvalidArgument));
+    }
+
+    #[test]
+    fn simplification_matches_css_parse_time_simplification() {
+        use SimplifiedCalc::*;
+        assert_eq!(sum(vec![px(10.0), px(5.0)]).simplify(), Some(Length(15.0)));
+        assert_eq!(f(CalcFunction::Min, vec![px(10.0), px(20.0)]).simplify(), Some(Length(10.0)));
+        assert_eq!(product(vec![pc(0.25), n(2.0)]).simplify(), Some(Percent(0.5)));
+        assert_eq!(product(vec![pc(0.5), Calc::Invert(Box::new(n(2.0)))]).simplify(), Some(Percent(0.25)));
+        // calc(50% - 50% + 3px) keeps its percentage term (CSS serialises it as calc(0% + 3px))
+        assert_eq!(sum(vec![pc(0.5), Calc::Negate(Box::new(pc(0.5))), px(3.0)]).simplify(), None);
+        assert_eq!(sum(vec![pc(0.5), px(-12.0)]).simplify(), None);
+        assert_eq!(f(CalcFunction::Min, vec![pc(0.5), px(20.0)]).simplify(), None);
+        assert_eq!(n(1.0).simplify(), None);
     }
 
     #[test]

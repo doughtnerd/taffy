@@ -21,7 +21,7 @@ pub use self::alignment::{
 };
 pub use self::available_space::AvailableSpace;
 #[cfg(feature = "calc")]
-pub use self::calc::{Calc, CalcError, CalcFunction, CalcStore, RoundingStrategy};
+pub use self::calc::{Calc, CalcError, CalcFunction, CalcStore, FromCalc, RoundingStrategy, SimplifiedCalc};
 pub use self::compact_length::{CalcHandle, CompactLength};
 pub use self::dimension::{
     Dimension, ExpandedDimension, ExpandedLengthPercentage, ExpandedLengthPercentageAuto, LengthPercentage,
