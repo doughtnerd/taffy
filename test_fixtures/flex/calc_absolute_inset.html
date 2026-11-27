@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="../../scripts/gentest/test_helper.js"></script>
+  <link rel="stylesheet" type="text/css" href="../../scripts/gentest/test_base_style.css">
+  <title>
+    calc() insets and sizes on an absolutely positioned child
+  </title>
+</head>
+<body>
+
+<div id="test-root" style="position: relative; width: 400px; height: 300px;">
+  <div style="position: absolute; left: calc(25% + 4px); top: calc(50% - 10px); right: calc(10% - 20px); height: calc(10% + 5px);"></div>
+  <div style="position: absolute; bottom: calc(5% + 1px); right: min(10%, 15px); width: 20px; height: 20px;"></div>
+</div>
+
+</body>
+</html>

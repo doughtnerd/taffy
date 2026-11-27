@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="../../scripts/gentest/test_helper.js"></script>
+  <link rel="stylesheet" type="text/css" href="../../scripts/gentest/test_base_style.css">
+  <title>
+    calc() widths, heights, margins and a max-width limit in block layout
+  </title>
+</head>
+<body>
+
+<div id="test-root" style="display: block; width: 400px; height: 200px;">
+  <div style="display: block; width: calc(50% + 10px); margin-left: calc(10% + 5px); height: calc(20% - 10px);"></div>
+  <div style="display: block; width: fit-content; max-width: calc(30% + 1px); height: 10px;">
+    <div style="display: block; width: 300px; height: 10px;"></div>
+  </div>
+  <div style="display: block; margin-left: calc(5% + 5px); margin-right: calc(5% + 5px); height: 10px;"></div>
+</div>
+
+</body>
+</html>

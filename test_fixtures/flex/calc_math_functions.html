@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="../../scripts/gentest/test_helper.js"></script>
+  <link rel="stylesheet" type="text/css" href="../../scripts/gentest/test_base_style.css">
+  <title>
+    round(), mod(), rem(), abs(), sign(), hypot() and typed arithmetic with percentages
+  </title>
+</head>
+<body>
+
+<div id="test-root" style="width: 400px; height: 300px; flex-direction: column; align-items: flex-start;">
+  <div style="width: round(up, 33%, 10px); height: 10px;"></div>
+  <div style="width: mod(30%, 50px); height: 10px;"></div>
+  <div style="width: rem(30%, 50px); height: 10px;"></div>
+  <div style="width: abs(-25%); height: 10px;"></div>
+  <div style="width: calc(sign(5%) * 40px); height: 10px;"></div>
+  <div style="width: hypot(30%, 40px); height: 10px;"></div>
+  <div style="width: calc(10% / 1px * 2px); height: 10px;"></div>
+  <div style="width: clamp(none, 50%, 150px); height: 10px;"></div>
+</div>
+
+</body>
+</html>
