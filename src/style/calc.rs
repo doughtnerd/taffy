@@ -569,6 +569,11 @@ fn clamp(min: Option<f64>, value: f64, max: Option<f64>) -> f64 {
     v
 }
 
+/// Zero with `a`'s sign (`f64::copysign` isn't in `core` at Taffy's MSRV)
+fn signed_zero(a: f64) -> f64 {
+    if a.is_sign_negative() { -0.0 } else { 0.0 }
+}
+
 /// `round(strategy, a, b)` (CSS Values 4 §10.4.1).
 fn round(strategy: RoundingStrategy, a: f64, b: f64) -> f64 {
     if a.is_nan() || b.is_nan() || b == 0.0 || (a.is_infinite() && b.is_infinite()) {
@@ -580,19 +585,19 @@ fn round(strategy: RoundingStrategy, a: f64, b: f64) -> f64 {
     if b.is_infinite() {
         // The multiples are 0 and ±infinity.
         return match strategy {
-            RoundingStrategy::Nearest | RoundingStrategy::ToZero => 0.0_f64.copysign(a),
+            RoundingStrategy::Nearest | RoundingStrategy::ToZero => signed_zero(a),
             RoundingStrategy::Up => {
                 if a > 0.0 {
                     f64::INFINITY
                 } else {
-                    0.0_f64.copysign(a)
+                    signed_zero(a)
                 }
             }
             RoundingStrategy::Down => {
                 if a < 0.0 {
                     f64::NEG_INFINITY
                 } else {
-                    0.0_f64.copysign(a)
+                    signed_zero(a)
                 }
             }
         };

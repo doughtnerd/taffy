@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### `calc()` in `TaffyTree`, and a `calc()` expression type and parser (#225)
+
+`TaffyTree` now stores `calc()` expressions and resolves them during layout, so `calc()` works in every property that accepts one with the high-level API: sizes, min/max sizes, margins, padding, borders, gaps, insets, `flex-basis` and grid tracks (including `minmax()` and `fit-content(calc())`). Previously `TaffyTree` resolved every `calc()` to 0.
+
+- `Calc` is a `calc()` expression over pixels, percentages, numbers and angles, covering the CSS math functions that can produce a `<length-percentage>`: sums, products (with typed arithmetic), `min()`, `max()`, `clamp()` (with `none`), `round()`, `mod()`, `rem()`, `abs()`, `sign()`, and with `std` `hypot()` and the trigonometric and exponential functions. `Calc::validate` type-checks an expression as CSS does, `Calc::resolve` evaluates it against a percentage basis, and `Calc::simplify` folds a percentage-free expression to a plain length, as CSS does at parse time.
+- `CalcStore` owns expressions and hands out generation-checked `CalcHandle`s. `TaffyTree` uses one; custom trees can too, from `LayoutPartialTree::resolve_calc_value`.
+- `TaffyTree::new_calc`, `remove_calc` and `calc` manage the tree's expressions; `TaffyTree::calc_value` returns a ready style value (a plain length or percentage when the expression simplifies to one). Removing a node doesn't remove the expressions its style refers to, since a handle can be shared.
+- `TaffyTree::compute_layout_with_measure_and_calc` passes a `CalcResolver` to the measure function, so `calc()` in a measured leaf's own size, padding and border resolves (`compute_layout` resolves them too). `compute_layout_with_measure` is unchanged.
+- With the `parse` feature, length values and grid tracks parse the math functions, and `Calc` implements `FromStr`. An expression that simplifies parses with `FromStr`; one that keeps a percentage needs somewhere to be stored, so it parses with `TaffyTree::parse_value` or `CalcStore::parse_value` (`ParseWithCalc`).
+- The test generator passes `calc()` through to Taffy's parser, so test fixtures can use it.
+
 ## 0.16.0
 
 The MSRV for this release is 1.85, and Taffy now uses the 2024 edition.

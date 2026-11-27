@@ -777,7 +777,8 @@ fn serialize_dimension(obj: &serde_json::Value) -> Option<Cow<'static, str>> {
         let unit = dimen.get("unit").unwrap();
         let value = dimen.get("value").and_then(|v| v.as_f64());
         // A math function's text, as Chrome serialises it (`calc(50% - 12px)`), parsed by Taffy's own parser
-        let text = || dimen.get("value").and_then(|v| v.as_str()).expect("Expected text for a calc() value").to_string();
+        let text =
+            || dimen.get("value").and_then(|v| v.as_str()).expect("Expected text for a calc() value").to_string();
         match unit {
             Value::String(unit) => {
                 return Some(match unit.as_str() {

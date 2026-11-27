@@ -1,6 +1,6 @@
 //! `fit-content()` with a `calc()` limit. Taffy stores the calc() as an opaque `CalcHandle` which is resolved
-//! through `LayoutPartialTree::resolve_calc_value`, so these tests use a minimal custom tree whose calc
-//! values are `pct * basis + px`.
+//! through `LayoutPartialTree::resolve_calc_value`. These tests use a minimal custom tree whose calc values are
+//! `pct * basis + px`, covering custom trees; `taffy_tree_calc.rs` covers `TaffyTree`'s own calc() storage.
 #[cfg(all(feature = "calc", feature = "grid", feature = "block_layout"))]
 mod fit_content_calc {
     use taffy::{

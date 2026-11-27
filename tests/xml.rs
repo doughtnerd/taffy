@@ -454,7 +454,12 @@ fn build_style<S: CheapCloneStr>(xnode: roxmltree::Node, tree: &mut TaffyTree<Te
 
         // TODO
         grid_auto_rows: parse_value_or::<GridAutoTracks>(tree, xnode.attribute("grid-auto-rows"), Default::default()).0,
-        grid_auto_columns: parse_value_or::<GridAutoTracks>(tree, xnode.attribute("grid-auto-columns"), Default::default()).0,
+        grid_auto_columns: parse_value_or::<GridAutoTracks>(
+            tree,
+            xnode.attribute("grid-auto-columns"),
+            Default::default(),
+        )
+        .0,
         grid_template_areas: Default::default(),
 
         grid_row: Line {
