@@ -1,6 +1,8 @@
 //! A typed representation of [CSS style properties](https://css-tricks.com/snippets/css/a-guide-to-flexbox/) in Rust. Used as input to layout computation.
 mod alignment;
 mod available_space;
+#[cfg(feature = "calc")]
+mod calc;
 mod compact_length;
 mod dimension;
 
@@ -18,6 +20,8 @@ pub use self::alignment::{
     JustifyItems, JustifySelf,
 };
 pub use self::available_space::AvailableSpace;
+#[cfg(feature = "calc")]
+pub use self::calc::{Calc, CalcError, CalcFunction, CalcStore, RoundingStrategy};
 pub use self::compact_length::{CalcHandle, CompactLength};
 pub use self::dimension::{
     Dimension, ExpandedDimension, ExpandedLengthPercentage, ExpandedLengthPercentageAuto, LengthPercentage,
