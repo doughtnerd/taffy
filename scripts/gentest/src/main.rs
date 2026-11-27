@@ -130,6 +130,9 @@ async fn main() {
         if name.starts_with("balance") {
             writeln!(&mut mod_file, r#"#[cfg(feature = "flexbox_balance")]"#).unwrap();
         }
+        if name.starts_with("calc_") || name.contains("_calc_") {
+            writeln!(&mut mod_file, r#"#[cfg(feature = "calc")]"#).unwrap();
+        }
         writeln!(
             &mut mod_file,
             "#[test]
@@ -776,9 +779,14 @@ fn serialize_dimension(obj: &serde_json::Value) -> Option<Cow<'static, str>> {
     if let Value::Object(dimen) = &obj {
         let unit = dimen.get("unit").unwrap();
         let value = dimen.get("value").and_then(|v| v.as_f64());
+        // A math function's text, as Chrome serialises it (`calc(50% - 12px)`), parsed by Taffy's own parser
+        let text =
+            || dimen.get("value").and_then(|v| v.as_str()).expect("Expected text for a calc() value").to_string();
         match unit {
             Value::String(unit) => {
                 return Some(match unit.as_str() {
+                    "calc" => Cow::from(text()),
+                    "fit-content-calc" => Cow::from(format!("fit-content({})", text())),
                     "auto" => Cow::from("auto"),
                     "max-content" => Cow::from("max-content"),
                     "min-content" => Cow::from("min-content"),

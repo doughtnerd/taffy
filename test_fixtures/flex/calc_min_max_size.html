@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="../../scripts/gentest/test_helper.js"></script>
+  <link rel="stylesheet" type="text/css" href="../../scripts/gentest/test_base_style.css">
+  <title>
+    calc() min and max sizes on flexing items
+  </title>
+</head>
+<body>
+
+<div id="test-root" style="width: 400px; height: 100px;">
+  <div style="flex-grow: 1; max-width: calc(25% + 10px); height: 10px;"></div>
+  <div style="flex-grow: 1; min-width: calc(50% + 10px); height: 10px;"></div>
+  <div style="flex-grow: 1; height: 10px; max-height: calc(5% - 1px);"></div>
+</div>
+
+</body>
+</html>

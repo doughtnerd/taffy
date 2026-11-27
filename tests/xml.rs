@@ -5,7 +5,7 @@ use taffy::{
     GridTemplateComponent, GridTemplateTracks, JustifyContent, JustifyItems, LengthPercentage, LengthPercentageAuto,
     Line, NodeId, Point, PrintTree, Rect, Size, TaffyTree, prelude::TaffyZero as _,
 };
-use taffy_test_helpers::{TestNodeContext, test_measure_function};
+use taffy_test_helpers::{TestNodeContext, test_measure_function_with_calc};
 
 #[path = "./xml/mod.rs"]
 mod xml;
@@ -205,7 +205,7 @@ fn run_xml_test(group: &str, name: &str) {
     #[cfg(all(debug_assertions, feature = "std"))]
     let cache_mode_change_evictions = taffy::tree::cache_mode_change_evictions();
 
-    tree.compute_layout_with_measure(root_node_id, available_space, test_measure_function).unwrap();
+    tree.compute_layout_with_measure_and_calc(root_node_id, available_space, test_measure_function_with_calc).unwrap();
 
     // The layout cache of a node only holds results computed with a single `sizing_mode` and
     // `vertical_margins_are_collapsible`, so laying a node out with more than one combination
@@ -238,7 +238,8 @@ fn construct_tree(
     parent: Option<taffy::NodeId>,
 ) -> OutputNode {
     if input.first_element_child().is_some() {
-        let tnode = tree.new_with_children(build_style(input), &[]).unwrap();
+        let style = build_style(input, tree);
+        let tnode = tree.new_with_children(style, &[]).unwrap();
         let mut expected = build_expectations(expected_x, tnode);
 
         if let Some(parent) = parent {
@@ -258,7 +259,8 @@ fn construct_tree(
         // let aspect_ratio = input.attribute("aspect-ratio");
         let writing_mode = parse_or_default(input.attribute("writing-mode"));
 
-        let tnode = tree.new_leaf(build_style(input)).unwrap();
+        let style = build_style(input, tree);
+        let tnode = tree.new_leaf(style).unwrap();
         tree.set_node_context(
             tnode,
             text_content.map(|text_content| TestNodeContext::ahem_text(text_content.to_string(), writing_mode)),
@@ -275,6 +277,26 @@ fn construct_tree(
 
 fn parse_or_default<T: FromStr<Err: Debug> + Default>(input: Option<&str>) -> T {
     parse_or(input, Default::default())
+}
+
+/// A value that can hold a `calc()`: parsed with the tree, which keeps any expression that needs a handle
+#[cfg(feature = "calc")]
+fn parse_value_or<T: taffy::ParseWithCalc>(
+    tree: &mut TaffyTree<TestNodeContext>,
+    input: Option<&str>,
+    fallback: T,
+) -> T {
+    input.map(|input| tree.parse_value(input).unwrap_or_else(|err| panic!("{input}: {err}"))).unwrap_or(fallback)
+}
+
+/// Without the `calc` feature, a value parses without the tree
+#[cfg(not(feature = "calc"))]
+fn parse_value_or<T: FromStr<Err: Debug>>(
+    _tree: &mut TaffyTree<TestNodeContext>,
+    input: Option<&str>,
+    fallback: T,
+) -> T {
+    parse_or(input, fallback)
 }
 
 fn parse_or<T: FromStr<Err: Debug>>(input: Option<&str>, fallback: T) -> T {
@@ -354,11 +376,12 @@ fn build_expectations(xnode: roxmltree::Node, node_id: NodeId) -> OutputNode {
     }
 }
 
-fn build_style<S: CheapCloneStr>(xnode: roxmltree::Node) -> taffy::Style<S> {
+fn build_style<S: CheapCloneStr>(xnode: roxmltree::Node, tree: &mut TaffyTree<TestNodeContext>) -> taffy::Style<S> {
+    // Values that can hold a calc() are parsed through the tree, which stores the expressions.
     let grid_template_rows: GridTemplateTracks<S, GridTemplateComponent<S>> =
-        parse_or_default(xnode.attribute("grid-template-rows"));
+        parse_value_or(tree, xnode.attribute("grid-template-rows"), Default::default());
     let grid_template_columns: GridTemplateTracks<S, GridTemplateComponent<S>> =
-        parse_or_default(xnode.attribute("grid-template-columns"));
+        parse_value_or(tree, xnode.attribute("grid-template-columns"), Default::default());
 
     taffy::Style {
         dummy: std::marker::PhantomData,
@@ -379,44 +402,44 @@ fn build_style<S: CheapCloneStr>(xnode: roxmltree::Node) -> taffy::Style<S> {
         position: parse_or_default(xnode.attribute("position")),
 
         size: Size {
-            width: parse_or(xnode.attribute("width"), Dimension::auto()),
-            height: parse_or(xnode.attribute("height"), Dimension::auto()),
+            width: parse_value_or(tree, xnode.attribute("width"), Dimension::auto()),
+            height: parse_value_or(tree, xnode.attribute("height"), Dimension::auto()),
         },
         min_size: Size {
-            width: parse_or(xnode.attribute("min-width"), LengthPercentageAuto::auto()),
-            height: parse_or(xnode.attribute("min-height"), LengthPercentageAuto::auto()),
+            width: parse_value_or(tree, xnode.attribute("min-width"), LengthPercentageAuto::auto()),
+            height: parse_value_or(tree, xnode.attribute("min-height"), LengthPercentageAuto::auto()),
         },
         max_size: Size {
-            width: parse_or(xnode.attribute("max-width"), LengthPercentageAuto::auto()),
-            height: parse_or(xnode.attribute("max-height"), LengthPercentageAuto::auto()),
+            width: parse_value_or(tree, xnode.attribute("max-width"), LengthPercentageAuto::auto()),
+            height: parse_value_or(tree, xnode.attribute("max-height"), LengthPercentageAuto::auto()),
         },
         inset: Rect {
-            top: parse_or(xnode.attribute("top"), LengthPercentageAuto::auto()),
-            left: parse_or(xnode.attribute("left"), LengthPercentageAuto::auto()),
-            bottom: parse_or(xnode.attribute("bottom"), LengthPercentageAuto::auto()),
-            right: parse_or(xnode.attribute("right"), LengthPercentageAuto::auto()),
+            top: parse_value_or(tree, xnode.attribute("top"), LengthPercentageAuto::auto()),
+            left: parse_value_or(tree, xnode.attribute("left"), LengthPercentageAuto::auto()),
+            bottom: parse_value_or(tree, xnode.attribute("bottom"), LengthPercentageAuto::auto()),
+            right: parse_value_or(tree, xnode.attribute("right"), LengthPercentageAuto::auto()),
         },
         margin: Rect {
-            top: parse_or(xnode.attribute("margin-top"), LengthPercentageAuto::ZERO),
-            left: parse_or(xnode.attribute("margin-left"), LengthPercentageAuto::ZERO),
-            bottom: parse_or(xnode.attribute("margin-bottom"), LengthPercentageAuto::ZERO),
-            right: parse_or(xnode.attribute("margin-right"), LengthPercentageAuto::ZERO),
+            top: parse_value_or(tree, xnode.attribute("margin-top"), LengthPercentageAuto::ZERO),
+            left: parse_value_or(tree, xnode.attribute("margin-left"), LengthPercentageAuto::ZERO),
+            bottom: parse_value_or(tree, xnode.attribute("margin-bottom"), LengthPercentageAuto::ZERO),
+            right: parse_value_or(tree, xnode.attribute("margin-right"), LengthPercentageAuto::ZERO),
         },
         padding: Rect {
-            top: parse_or(xnode.attribute("padding-top"), LengthPercentage::ZERO),
-            left: parse_or(xnode.attribute("padding-left"), LengthPercentage::ZERO),
-            bottom: parse_or(xnode.attribute("padding-bottom"), LengthPercentage::ZERO),
-            right: parse_or(xnode.attribute("padding-right"), LengthPercentage::ZERO),
+            top: parse_value_or(tree, xnode.attribute("padding-top"), LengthPercentage::ZERO),
+            left: parse_value_or(tree, xnode.attribute("padding-left"), LengthPercentage::ZERO),
+            bottom: parse_value_or(tree, xnode.attribute("padding-bottom"), LengthPercentage::ZERO),
+            right: parse_value_or(tree, xnode.attribute("padding-right"), LengthPercentage::ZERO),
         },
         border: Rect {
-            top: parse_or(xnode.attribute("border-top"), LengthPercentage::ZERO),
-            left: parse_or(xnode.attribute("border-left"), LengthPercentage::ZERO),
-            bottom: parse_or(xnode.attribute("border-bottom"), LengthPercentage::ZERO),
-            right: parse_or(xnode.attribute("border-right"), LengthPercentage::ZERO),
+            top: parse_value_or(tree, xnode.attribute("border-top"), LengthPercentage::ZERO),
+            left: parse_value_or(tree, xnode.attribute("border-left"), LengthPercentage::ZERO),
+            bottom: parse_value_or(tree, xnode.attribute("border-bottom"), LengthPercentage::ZERO),
+            right: parse_value_or(tree, xnode.attribute("border-right"), LengthPercentage::ZERO),
         },
         gap: Size {
-            width: parse_or(xnode.attribute("column-gap"), LengthPercentage::ZERO),
-            height: parse_or(xnode.attribute("row-gap"), LengthPercentage::ZERO),
+            width: parse_value_or(tree, xnode.attribute("column-gap"), LengthPercentage::ZERO),
+            height: parse_value_or(tree, xnode.attribute("row-gap"), LengthPercentage::ZERO),
         },
 
         aspect_ratio: maybe_parse(xnode.attribute("aspect-ratio")),
@@ -434,7 +457,7 @@ fn build_style<S: CheapCloneStr>(xnode: roxmltree::Node) -> taffy::Style<S> {
         flex_line_count: parse_or(xnode.attribute("flex-line-count"), 1),
         flex_grow: parse_or(xnode.attribute("flex-grow"), 0.0),
         flex_shrink: parse_or(xnode.attribute("flex-shrink"), 1.0),
-        flex_basis: parse_or(xnode.attribute("flex-basis"), Dimension::auto()),
+        flex_basis: parse_value_or(tree, xnode.attribute("flex-basis"), Dimension::auto()),
 
         grid_auto_flow: parse_or_default(xnode.attribute("grid-auto-flow")),
 
@@ -445,8 +468,13 @@ fn build_style<S: CheapCloneStr>(xnode: roxmltree::Node) -> taffy::Style<S> {
         grid_template_column_names: grid_template_columns.line_names,
 
         // TODO
-        grid_auto_rows: parse_or_default::<GridAutoTracks>(xnode.attribute("grid-auto-rows")).0,
-        grid_auto_columns: parse_or_default::<GridAutoTracks>(xnode.attribute("grid-auto-columns")).0,
+        grid_auto_rows: parse_value_or::<GridAutoTracks>(tree, xnode.attribute("grid-auto-rows"), Default::default()).0,
+        grid_auto_columns: parse_value_or::<GridAutoTracks>(
+            tree,
+            xnode.attribute("grid-auto-columns"),
+            Default::default(),
+        )
+        .0,
         grid_template_areas: Default::default(),
 
         grid_row: Line {

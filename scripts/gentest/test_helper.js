@@ -8,6 +8,27 @@ function getScrollBarWidth() {
   return width;
 }
 
+// CSS math functions (calc(), min(), clamp(), ...): their text is passed through to Taffy's parser as it is
+const MATH_FUNCTION_REGEX = /^(calc|min|max|clamp|round|mod|rem|abs|sign)\(/i;
+
+// Split `input` at `separator` (a regex matching one separator) outside parentheses
+function splitTopLevel(input, separator = /\s/) {
+  const parts = [];
+  let depth = 0, current = '';
+  for (const char of input.trim()) {
+    if (char === '(') depth++;
+    if (char === ')') depth--;
+    if (depth === 0 && separator.test(char)) {
+      if (current) parts.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
 class TrackSizingParser {
   static INITIAL_CHAR_REGEX = /[a-z-A-Z0-9]/;
   static TOKEN_CHAR_REGEX = /[-\.a-z-A-Z0-9%]/;
@@ -69,6 +90,18 @@ class TrackSizingParser {
         continue;
       }
 
+      if (char === '(' && MATH_FUNCTION_REGEX.test(token + '(')) {
+        // A math function: its whole text, up to the matching parenthesis
+        const start = this.index - token.length;
+        let depth = 0;
+        do {
+          if (this.input[this.index] === '(') depth++;
+          if (this.input[this.index] === ')') depth--;
+          this.index++;
+        } while (depth > 0 && this.index < this.input.length);
+        return { kind: 'scalar', unit: 'calc', value: this.input.slice(start, this.index) };
+      }
+
       if (char === '(') {
         this.index++;
         const args = this._parseItemList(',', ')');
@@ -112,6 +145,7 @@ function parseRepetition(input) {
 }
 
 function parseDimension(input, options = { allowFrUnits: false }) {
+  if (MATH_FUNCTION_REGEX.test(input)) return { unit: 'calc', value: input };
   if (options.allowFrUnits && input.endsWith('fr')) return { unit: 'fraction', value: parseFloat(input.replace('fr', '')) };
   if (input.endsWith('px')) return { unit: 'px', value: parseFloat(input.replace('px', '')) };
   if (input.endsWith('%')) return { unit: 'percent', value: parseFloat(input.replace('%', '')) / 100 };
@@ -126,6 +160,7 @@ function parseDimension(input, options = { allowFrUnits: false }) {
     const arg = fitContentMatch[1].trim();
     if (arg.endsWith('px')) return { unit: 'fit-content-px', value: parseFloat(arg) };
     if (arg.endsWith('%')) return { unit: 'fit-content-percent', value: parseFloat(arg) / 100 };
+    if (MATH_FUNCTION_REGEX.test(arg)) return { unit: 'fit-content-calc', value: arg };
   }
   return undefined;
 }
@@ -174,7 +209,7 @@ function parseSize(size) {
 
 function parseGaps(style) {
   if (style.gap) {
-    const gaps = style.gap.trim().split(/\s+/).map(part => parseDimension(part));
+    const gaps = splitTopLevel(style.gap).map(part => parseDimension(part));
     return { row: gaps[0], column: gaps[1] ?? gaps[0] };
   }
   if (style.rowGap || style.columnGap) {
